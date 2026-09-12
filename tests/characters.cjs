@@ -32,10 +32,10 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     for (const p of [host, guest]) await p.locator('.result-box').waitFor();
     assert.deepEqual(await host.locator('.answers .answer-item p').allTextContents(), ['Кваки', 'Буба', 'Реальность']);
     assert.deepEqual(await guest.locator('.answers .answer-item p').allTextContents(), ['Кваки', 'Буба', 'Реальность']);
-    await host.reload(); await host.locator('.result-box').waitFor(); assert.match(await host.locator('.mini-player').first().innerText(), /Кваки/);
+    await host.reload(); await host.locator('.result-box').waitFor(); assert.match(await host.locator('.score-strip .score-item').first().innerText(), /Кваки/);
     await host.locator('#leave-room').click(); await host.locator('[data-mode="solo"]').click();
     await host.locator('#create-button').click(); await host.locator('.board').waitFor();
-    assert.match(await host.locator('.mini-player').innerText(), /Кваки/);
+    assert.match(await host.locator('.score-strip').innerText(), /Кваки/);
     await host.locator('#leave-room').click();
     // Changing a manually entered code must remove the old occupied state.
     await guest.locator('#return-home').waitFor(); await guest.locator('#return-home').click(); await guest.locator('#room-code').fill(code);

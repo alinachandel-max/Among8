@@ -26,11 +26,23 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     });
     for (const q of questions) {
       question = q; phase = 'playing'; await page.goto(base); await page.locator('#squares').waitFor();
-      assert.equal(await page.locator('#squares svg').count(), 100);
+      assert.equal(await page.locator('#squares .cell-emoji').count(), 100);
+      assert.equal(await page.locator('#squares svg').count(), 0);
+      assert.equal(await page.locator('.board-top, .mini-player').count(), 0);
+      assert.equal(await page.locator('.cell-emoji:visible').count(), 0);
       assert.equal(await page.locator('#squares').getAttribute('data-theme'), q.icon);
       if (q.age_min) assert.equal(await page.locator('.age-label').innerText(), `${q.age_min} ЛЕТ И СТАРШЕ`);
-      await page.locator('.square[data-value="37"]').click(); assert.equal(await page.locator('.square.filled svg').count(), 37);
-      assert.equal(await page.locator('.square.filled svg').first().getAttribute('data-symbol'), q.icon);
+      await page.locator('.square[data-value="37"]').click(); assert.equal(await page.locator('.square.filled .cell-emoji:visible').count(), 37);
+      assert.equal(await page.locator('.square:not(.filled) .cell-emoji:visible').count(), 0);
+      await page.locator('#squares').focus(); await page.keyboard.press('Home');
+      assert.equal(await page.locator('.cell-emoji:visible').count(), 0);
+      await page.keyboard.press('End'); assert.equal(await page.locator('.cell-emoji:visible').count(), 100);
+      await page.locator('.square[data-value="37"]').click();
+      const field = await page.locator('#squares').boundingBox(); const title = await page.locator('.question h1').boundingBox();
+      assert(field.height >= 300 && field.width >= 300, 'Field should dominate mobile gameplay');
+      assert(field.height > title.height * 3);
+      const leave = await page.locator('#leave-room').boundingBox(); assert(leave.y > field.y + field.height, 'Exit belongs at the bottom');
+      assert.equal(await page.locator('.square.filled .cell-emoji').first().getAttribute('data-symbol'), q.icon);
       let box = await page.locator('#main-action').boundingBox(); assert(box.y + box.height <= 740, `Question ${q.id}: submit below fold ${box.y + box.height}`);
       phase = 'reveal'; await page.reload(); await page.locator('.result-box').waitFor();
       assert.equal(await page.locator('.fact-details').getAttribute('open'), null);
@@ -49,6 +61,8 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     }
     await context.close();
     console.log(`20 question layouts passed; lowest primary button ends at ${Math.round(maxBottom)}px on a 740px viewport.`);
+
+    if (process.env.LAYOUT_ONLY === '1') { assert.deepEqual(errors, []); return; }
 
     // Real database + two independent clients; native audio is instrumented, not replaced.
     const hostContext = await browser.newContext({ viewport: { width: 390, height: 844 } });

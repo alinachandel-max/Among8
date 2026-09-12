@@ -73,6 +73,13 @@ class Character {
 }
 export function mountCharacters() {
   for (const [canvas, instance] of instances) if (!canvas.isConnected) instance.destroy();
-  document.querySelectorAll('canvas[data-character]').forEach(canvas => { if (!instances.has(canvas)) instances.set(canvas, new Character(canvas)); });
+  document.querySelectorAll('canvas[data-character]').forEach(canvas => {
+    if (!instances.has(canvas)) instances.set(canvas, new Character(canvas));
+    const instance = instances.get(canvas);
+    if (instance.kind !== canvas.dataset.character) {
+      instance.kind = canvas.dataset.character;
+      instance.last = 0; // Redraw a changed character even with reduced motion.
+    }
+  });
 }
 export function setCharacterMood(mood) { document.querySelectorAll('canvas[data-character]').forEach(canvas => { canvas.dataset.mood = mood; }); }

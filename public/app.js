@@ -70,6 +70,16 @@ function updateCharacterChoices(busy = state.pending) {
   $('create-button').textContent = state.mode === 'solo' ? 'Играть одному →' : validCode ? 'Присоединиться к дуэли →' : 'Создать дуэль →';
   $('join-button').hidden = state.mode === 'solo' || validCode;
   $('character-status').textContent = availability?.message || (validCode && !availability ? 'Проверяем свободных персонажей…' : occupied.length ? `${occupied.map(id => avatarNames[id]).join(', ')} уже занят${occupied.length > 1 ? 'ы' : ''}. Выбери свободного персонажа.` : '');
+  updateHeroCharacter(occupied);
+}
+function updateHeroCharacter(occupied = []) {
+  const [hero, rival] = document.querySelectorAll('.intro-duo canvas');
+  const placeholder = $('hero-placeholder');
+  hero.hidden = !state.avatar;
+  placeholder.hidden = !!state.avatar;
+  if (state.avatar) hero.dataset.character = state.avatar;
+  rival.dataset.character = occupied[0] || (state.avatar === 'peach' ? 'plum' : 'peach');
+  mountCharacters();
 }
 async function checkAvailability() {
   clearTimeout(state.availabilityTimer);
@@ -160,13 +170,14 @@ async function copyInvite() {
 }
 function renderBoard() {
   const room = state.room, revealed = room.phase === 'reveal', q = room.question;
-  const mini = p => p ? `<div class="mini-player">${character(p.avatar)}<div><strong>${escape(p.name)}${p.slot === room.role ? ' · ты' : ''}</strong><span class="points" data-player-score="${p.slot}">${p.score} баллов</span></div></div>` : '<div class="solo-label">СОЛО</div>';
+  const progress = `<span class="round-count">Раунд ${room.questionSet || 1} · ${String(room.round + 1).padStart(2, '0')}/10</span>`;
+  const scores = room.players.filter(Boolean).map(p => `<span class="score-item ${p.slot}">${escape(p.name)}${p.slot === room.role ? ' · ты' : ''}: <strong data-player-score="${p.slot}">${p.score}</strong></span>`).join('');
   const scope = q.scope || q.category;
   const age = q.ageMin ? `<span class="age-label">${q.ageMin} ЛЕТ И СТАРШЕ</span>` : '';
   const year = q.year_kind === 'reference' ? '' : `<span class="question-year">${q.year}</span>`;
   const info = `<details class="question-details"><summary aria-label="Уточнение к вопросу">i</summary><p>${escape(q.context)}</p></details>`;
-  const toolbar = `<div class="selector-toolbar"><button id="zero" class="end" aria-label="Выбрать 0 процентов">0%</button><button id="minus" class="step" aria-label="Уменьшить на один" ${revealed ? 'disabled' : ''}>−</button><span>1 значок = 1%</span><button id="plus" class="step" aria-label="Увеличить на один" ${revealed ? 'disabled' : ''}>+</button><button id="hundred" class="end" aria-label="Выбрать 100 процентов">100%</button></div>`;
-  $('room-view').innerHTML = `<div class="board"><div class="board-top">${mini(room.players[0])}<div class="timer-wrap"><div id="timer" class="timer" aria-label="Осталось секунд">15</div><div class="round-count">Раунд ${room.questionSet || 1} · ${String(room.round + 1).padStart(2, '0')}/10</div></div>${mini(room.players[1])}</div><div class="time-track"><i id="time-fill"></i></div><div class="question"><div class="question-meta"><span class="population-scope">${escape(scope)}</span>${age}${year}${info}</div><h1 tabindex="-1">${escape(q.text)}</h1>${q.shortNote ? `<p class="question-context">${escape(q.shortNote)}</p>` : ''}</div><div id="answer-values" class="answers ${revealed ? 'round-scores' : 'single'}"></div><div id="squares" class="squares" data-theme="${escape(q.icon || 'spark')}" role="slider" tabindex="${revealed ? '-1' : '0'}" aria-label="Твой ответ в процентах" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Ответ не выбран">${Array.from({ length: 100 }, (_, i) => `<span class="square" data-value="${i + 1}" aria-hidden="true">${questionIcon(q.icon)}</span>`).join('')}</div>${toolbar}${revealed ? revealMarkup() : '<p id="countdown-note" class="countdown-note"></p>'}<div class="actions"><button id="main-action" class="button primary" disabled>${revealed ? room.round === 9 ? 'Посмотреть результат' : 'Следующий вопрос' : 'Ответить'}</button><p id="opponent-status" class="opponent-status"></p></div><button id="leave-room" class="text-button">Выйти</button></div>`;
+  const toolbar = `<div class="selector-toolbar"><button id="zero" class="end" aria-label="Выбрать 0 процентов">0%</button><button id="minus" class="step" aria-label="Уменьшить на один" ${revealed ? 'disabled' : ''}>−</button><span>1 клетка = 1%</span><button id="plus" class="step" aria-label="Увеличить на один" ${revealed ? 'disabled' : ''}>+</button><button id="hundred" class="end" aria-label="Выбрать 100 процентов">100%</button></div>`;
+  $('room-view').innerHTML = `<div class="board ${revealed ? 'is-revealed' : 'is-choosing'}"><div class="question"><div class="question-meta">${progress}<span class="population-scope">${escape(scope)}</span>${age}${year}${info}</div><h1 tabindex="-1">${escape(q.text)}</h1>${q.shortNote ? `<p class="question-context">${escape(q.shortNote)}</p>` : ''}</div><div class="field-head"><div id="answer-values" class="answers ${revealed ? 'round-scores' : 'single'}"></div><div class="field-timer" ${revealed ? 'hidden' : ''}><span id="timer" class="timer" aria-label="Осталось секунд">15</span><span>сек.</span></div></div><div id="squares" class="squares" data-theme="${escape(q.icon || 'spark')}" role="slider" tabindex="${revealed ? '-1' : '0'}" aria-label="Твой ответ в процентах" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Ответ не выбран">${Array.from({ length: 100 }, (_, i) => `<span class="square" data-value="${i + 1}" aria-hidden="true">${questionIcon(q.icon)}</span>`).join('')}</div>${toolbar}${revealed ? '' : '<p id="countdown-note" class="countdown-note"></p>'}<div class="actions"><button id="main-action" class="button primary" disabled>${revealed ? room.round === 9 ? 'Посмотреть результат' : 'Следующий вопрос' : 'Ответить'}</button><p id="opponent-status" class="opponent-status"></p></div><div class="score-strip" aria-label="Общий счёт">${scores}</div>${revealed ? revealMarkup() : ''}<button id="leave-room" class="text-button">Выйти</button></div>`;
   if (revealed) {
     const record = room.history.at(-1);
     $('answer-values').innerHTML = room.players.filter(Boolean).map(p => answerMarkup(p.slot, p.name, p.answer, record[p.slot])).join('') + answerMarkup('actual', 'Реальность', q.answerLabel);
@@ -233,7 +244,7 @@ function updateLive() {
     $('timer').textContent = counting ? Math.max(1, Math.ceil((room.startAt - now) / 1000)) : remaining;
     $('timer').classList.toggle('urgent', !counting && remaining <= 5);
     $('timer').setAttribute('aria-label', counting ? 'Отсчёт до начала' : `Осталось ${remaining} секунд`);
-    $('time-fill').style.setProperty('--remaining', String(counting ? 1 : Math.max(0, Math.min(1, (room.deadline - now) / 15000))));
+    $('time-fill')?.style.setProperty('--remaining', String(counting ? 1 : Math.max(0, Math.min(1, (room.deadline - now) / 15000))));
     $('countdown-note').textContent = counting ? 'Сейчас начнём. Приготовься!' : remaining === 0 ? 'Время вышло. Сравниваем…' : '';
     $('main-action').textContent = state.pending ? 'Отправляем…' : me.answered ? 'Ответ принят' : remaining === 0 ? 'Время вышло' : 'Ответить';
     $('squares').setAttribute('aria-disabled', String(!canAnswer()));
@@ -243,7 +254,7 @@ function updateLive() {
     const tick = counting ? `start-${Math.ceil((room.startAt - now) / 1000)}` : String(remaining);
     if (tick !== state.lastTick) { if (counting || remaining > 0 && remaining <= 5 && !me.answered) playSound('tick'); if (!counting && state.lastTick?.startsWith('start')) playSound('start'); state.lastTick = tick; }
   } else if (room.phase === 'reveal') {
-    $('timer').textContent = '✓'; $('timer').setAttribute('aria-label', 'Ответы раскрыты'); $('time-fill').style.setProperty('--remaining', '0');
+    $('timer').textContent = '✓'; $('timer').setAttribute('aria-label', 'Ответы раскрыты'); $('time-fill')?.style.setProperty('--remaining', '0');
     $('main-action').disabled = state.pending || me.ready || serverTime() < room.revealAt + 1000;
     $('main-action').textContent = me.ready ? 'Ждём соперника…' : room.round === 9 ? 'Посмотреть результат' : 'Следующий вопрос';
     $('opponent-status').textContent = room.mode === 'solo' ? '' : other.ready ? `${other.name}: можно продолжать` : 'Продолжим, когда вы оба будете готовы';
