@@ -1,0 +1,1 @@
+{"name":"among8-online","version":"1.0.0","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","start":"node scripts/dev.mjs","test":"node --test tests/server.test.mjs"},"devDependencies":{"drizzle-kit":"0.31.10","drizzle-orm":"0.45.2"}}

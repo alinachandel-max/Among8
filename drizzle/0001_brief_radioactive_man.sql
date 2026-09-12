@@ -1,0 +1,1 @@
+ALTER TABLE `rooms` ADD `mode` text DEFAULT 'duel' NOT NULL;
