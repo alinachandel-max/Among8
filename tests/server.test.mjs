@@ -46,7 +46,7 @@ test('duel: protected answers, exactly once scoring, readiness, full match and r
       assert(duplicates.every(r => r.players[0].score === (round + 1) * 100));
       assert.equal((await call(1, path + '/ready', { round })).status, 409);
       advance(1001);
-      room = await call(1, path + '/ready', { round }); assert.equal(room.phase, 'reveal');
+      room = await call(1, path + '/ready', { round }); assert.equal(room.phase, round === 9 ? 'finished' : 'reveal');
       room = await call(2, path + '/ready', { round });
       assert.equal(room.phase, round === 9 ? 'finished' : 'playing');
     }
@@ -163,7 +163,7 @@ test('round 2 stays a separate ten-question set through joining, completion and 
     assert.equal(room.questionSet, 2, 'Guest inherits the host selection');
     room = await call(1, path + '/start', {}); const seen = new Set();
     for (let round = 0; round < 10; round++) {
-      advance(3000); assert(room.question.id >= 11 && room.question.id <= 20); seen.add(room.question.id);
+      advance(3000); assert(questions.some(q => q.id === room.question.id && q.question_set === 2 && !q.archived)); seen.add(room.question.id);
       assert.equal(room.question.answer, undefined); assert(room.question.icon); assert(room.question.scope);
       const answer = actual(room.question.id);
       await call(1, path + '/answer', { round, value: answer }); room = await call(2, path + '/answer', { round, value: answer });
@@ -178,10 +178,10 @@ test('round 2 stays a separate ten-question set through joining, completion and 
 });
 
 test('question data and disappointment sound keep precise age and closeness boundaries', () => {
-  assert.equal(questions.length, 20);
-  assert.equal(questions.filter(q => q.question_set === 1).length, 10);
-  assert.equal(questions.filter(q => q.question_set === 2).length, 10);
-  assert.deepEqual(questions.filter(q => q.question_set === 1).map(q => q.answer), [68, 11, 88, 73, 79, 80, 92, 52, 74, 60]);
+  assert.equal(questions.filter(q => !q.archived).length, 20);
+  assert.equal(questions.filter(q => !q.archived && q.question_set === 1).length, 10);
+  assert.equal(questions.filter(q => !q.archived && q.question_set === 2).length, 10);
+  assert.deepEqual(questions.filter(q => !q.archived && q.question_set === 1).map(q => q.answer), [68, 11, 88, 73, 80, 92, 52, 74, 30, 9]);
   assert(questions.every(q => q.icon && q.scope && Number.isInteger(q.answer)));
   assert(questions.every(q => !/\d[,.]?\d*\s*%|три четверти/i.test(q.context)), 'Context visible before reveal must not give away the answer');
   assert.equal(questions.find(q => q.id === 3).age_min, 15);
@@ -194,4 +194,33 @@ test('question data and disappointment sound keep precise age and closeness boun
   assert.equal(revealSound(record(30, 0), 'duel'), 'reveal');
   assert.equal(revealSound(record(11, 0), 'solo'), 'disappointed');
   assert.equal(revealSound(record(2, null), 'solo'), 'reveal');
+});
+
+test('personal finals preserve peer reveal, rematch votes, and legacy last questions', async () => {
+  const { db, call, create, advance } = setup();
+  try {
+    let room = await create(); const path = '/rooms/' + room.code;
+    await call(2, path + '/join', { avatar: 'peach' });
+    room = await call(1, path + '/start', {});
+    for (let round = 0; round < 10; round++) {
+      advance(3000); const value = actual(room.question.id);
+      await call(1, path + '/answer', { round, value });
+      room = await call(2, path + '/answer', { round, value });
+      advance(1001);
+      if (round < 9) { await call(1, path + '/ready', { round }); room = await call(2, path + '/ready', { round }); }
+    }
+    // Simulate an in-flight last question from the previous release.
+    db.raw.prepare("UPDATE rooms SET history = json_remove(history, '$[9].finalSeen') WHERE code = ?").run(room.code);
+    room = await call(1, path + '/ready', { round: 9 });
+    assert.equal(room.phase, 'finished');
+    assert.equal((await call(2, path)).phase, 'reveal');
+    assert.equal((await call(2, path + '/rematch', { round: 9 })).status, 409);
+    await call(1, path + '/rematch', { round: 9 });
+    await call(1, path + '/ready', { round: 9 }); // delayed duplicate does not reset rematch vote
+    room = await call(2, path + '/ready', { round: 9 });
+    assert.equal(room.phase, 'finished'); assert.equal(room.players[0].ready, true);
+    room = await call(2, path + '/rematch', { round: 9 });
+    assert.equal(room.phase, 'playing'); assert.equal(room.round, 0);
+    assert.equal((await call(1, path + '/ready', { round: 9 })).status, 409);
+  } finally { db.close(); }
 });

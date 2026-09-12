@@ -1,85 +1,67 @@
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const base = process.env.AMONG8_URL || 'http://127.0.0.1:8082';
 const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: true });
+const questions = JSON.parse(fs.readFileSync(path.join(__dirname, '../server/questions.json')));
+const score = e => e <= 2 ? 100 : e <= 5 ? 80 : e <= 10 ? 60 : e <= 15 ? 40 : e <= 20 ? 20 : 0;
 (async () => {
-  const browser = await chromium.launch({ headless: true, channel: 'chrome' });
-  try {
-    const errors = [];
-    async function player(width) {
-      const context = await browser.newContext({ viewport: { width, height: 900 } });
-      const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
-      page.on('console', e => { if (e.type() === 'error') errors.push(e.text()); });
-      return { page, context };
-    }
-    const { page: host, context: hostContext } = await player(390);
-    const { page: guest } = await player(430);
-    await host.goto(base); await host.locator('[data-avatar="plum"]').waitFor();
-    await host.screenshot({ path: path.join(out, 'setup-390.png'), fullPage: true });
-    await host.locator('[data-avatar="plum"]').click();
-    await host.locator('#create-button').click(); await host.locator('.invite-code').waitFor();
-    const code = (await host.locator('.invite-code').innerText()).trim();
-    await guest.goto(`${base}/?room=${code}`); await guest.locator('[data-avatar="peach"]').click();
-    await guest.locator('#create-button').click(); await guest.locator('.invite-code').waitFor();
-    await host.getByRole('heading', { name: 'Оба здесь. Начинаем?' }).waitFor();
-    await host.screenshot({ path: path.join(out, 'lobby-390.png'), fullPage: true });
-    await host.locator('#start-match').click();
-    const ready = p => p.waitForFunction(() => document.querySelector('#squares')?.getAttribute('aria-disabled') === 'false', { timeout: 10000 });
-    const next = async () => {
-      await host.waitForFunction(() => document.querySelector('#main-action')?.disabled === false);
-      await guest.waitForFunction(() => document.querySelector('#main-action')?.disabled === false);
-      await host.locator('#main-action').click(); await guest.locator('#main-action').click();
-    };
-    await Promise.all([ready(host), ready(guest)]);
-    assert.equal(await host.locator('.square').count(), 100);
-    await host.locator('.square[data-value="37"]').click(); await guest.locator('.square[data-value="65"]').click();
-    await host.locator('#main-action').click(); await host.getByRole('button', { name: 'Ответ принят', exact: true }).waitFor();
-    assert.equal(await guest.locator('.answers .answer-item').count(), 1, 'No opponent/reality before reveal');
-    await guest.locator('#main-action').click(); await host.locator('.result-box').waitFor(); await guest.locator('.result-box').waitFor();
-    assert.equal(await host.locator('.answers .answer-item').count(), 3);
-    assert.deepEqual(await host.locator('.answers .answer-number > span').allTextContents(), await guest.locator('.answers .answer-number > span').allTextContents());
-    for (const width of [360, 390, 430, 768, 1440]) {
-      await host.setViewportSize({ width, height: 900 });
-      assert.equal(await host.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      await host.screenshot({ path: path.join(out, `reveal-${width}.png`), fullPage: true });
-    }
-    await host.setViewportSize({ width: 390, height: 900 });
-    await next(); await Promise.all([ready(host), ready(guest)]);
-    await host.reload(); await host.locator('.board').waitFor();
-    assert.match(await host.locator('.round-count').innerText(), /02\/10/, 'Reload resumes the same question');
-    await host.locator('.result-box').waitFor({ timeout: 23000 });
-    await guest.locator('.result-box').waitFor({ timeout: 23000 });
-    assert.match(await host.locator('.round-scores').innerText(), /Время вышло/);
-    for (let round = 2; round < 10; round++) {
-      await next(); await Promise.all([ready(host), ready(guest)]);
-      await host.locator('#zero').click(); await guest.locator('#hundred').click();
-      await Promise.all([host.locator('#main-action').click(), guest.locator('#main-action').click()]);
-      await host.locator('.result-box').waitFor(); await guest.locator('.result-box').waitFor();
-    }
-    await next(); await host.locator('.final').waitFor(); await guest.locator('.final').waitFor();
-    assert.deepEqual(await host.locator('.final-points').allTextContents(), await guest.locator('.final-points').allTextContents());
-    await host.screenshot({ path: path.join(out, 'duel-final.png'), fullPage: true });
-    await host.locator('#rematch').click(); await guest.locator('#rematch').click();
-    await host.locator('.board').waitFor(); assert.match(await host.locator('.round-count').innerText(), /01\/10/);
-    await host.locator('#leave-room').click(); await guest.getByRole('heading', { name: 'Дуэль завершена' }).waitFor();
-    console.log('Duel passed: 10 rounds, timeout, reconnection, rematch, synchronized reveal.');
-
-    await host.locator('[data-mode="solo"]').click();
-    assert.equal(await host.locator('#room-code').isVisible(), false);
-    await host.locator('#create-button').click();
-    for (let round = 0; round < 10; round++) {
-      await ready(host); await host.locator('.square[data-value="68"]').click(); await host.locator('#main-action').click();
-      await host.locator('.result-box').waitFor(); assert.equal(await host.locator('.answers .answer-item').count(), 2);
-      await host.waitForFunction(() => !document.querySelector('#main-action').disabled); await host.locator('#main-action').click();
-    }
-    await host.locator('.solo-final').waitFor(); await host.screenshot({ path: path.join(out, 'solo-final.png'), fullPage: true });
-    await host.locator('#rematch').click(); await host.locator('.board').waitFor();
-    await host.locator('#sound-toggle').click(); assert.equal(await host.locator('#sound-toggle').getAttribute('aria-pressed'), 'false');
-    await host.reload(); await host.locator('.board').waitFor(); assert.equal(await host.locator('#sound-toggle').getAttribute('aria-pressed'), 'false');
-    assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ passed: true, duelRounds: 10, soloRounds: 10, timeout: true, reload: true, rematch: true, soundToggle: true, viewports: [360, 390, 430, 768, 1440], errors }, null, 2));
-    console.log('Solo passed: 10 rounds, rematch, persistent sound preference. No browser errors.');
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exit(1); });
+ const b = await chromium.launch({ headless: true, channel: 'chrome' });
+ const errors = [], results = { viewports: [], seen: [] };
+ async function client(width = 390, height = 844, practiced = true) {
+  const c = await b.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true });
+  await c.addInitScript(practiced => { if (practiced) localStorage.setItem('among8-practice', 'done'); }, practiced);
+  const p = await c.newPage(); p.on('pageerror', e => errors.push(e.message)); p.on('dialog', d => d.accept()); return { c, p };
+ }
+ const capture = (p, name) => p.screenshot({ path: path.join(out, name + '.png'), fullPage: true, animations: 'disabled' });
+ const ready = p => p.waitForFunction(() => document.querySelector('#squares')?.getAttribute('aria-disabled') === 'false');
+ const reveal = p => p.locator('.result-box').waitFor({ timeout: 23000 });
+ const pick = (p, value) => p.locator(value ? `[data-value="${value}"]` : '#zero').click();
+ const next = async p => { await p.waitForFunction(() => document.querySelector('#main-action') && !document.querySelector('#main-action').disabled); await p.locator('#main-action').click(); };
+ async function question(p) { const text = await p.locator('.question h1').innerText(); const q = questions.find(q => q.question === text); assert(q && !q.archived); results.seen.push(q.id); return q; }
+ try {
+  const { p: trial } = await client(360, 640, false); await trial.goto(base); await trial.locator('.practice').waitFor();
+  assert.equal(await trial.locator('.square').count(), 100); assert.equal(await trial.locator('.field-timer').isVisible(), false);
+  await capture(trial, 'practice-empty-360'); await pick(trial, 37); await trial.getByRole('button', { name: 'Ответить: 37%' }).click(); await reveal(trial);
+  assert.deepEqual(await trial.locator('.answer-number>span').allTextContents(), ['37', '≈71']);
+  await capture(trial, 'practice-reveal-360'); await next(trial); await trial.locator('#setup').waitFor();
+  assert.equal(await trial.evaluate(() => localStorage.getItem('among8-practice')), 'done');
+  await trial.locator('[data-avatar="lime"]').click(); assert.equal(await trial.locator('#selected-character').innerText(), 'Ты — Кваки');
+  assert.equal(await trial.locator('.intro-duo canvas').first().getAttribute('data-character'), 'lime'); await capture(trial, 'setup-360');
+  await trial.locator('#info-open').click(); assert.equal(await trial.locator('dialog').isVisible(), true); await trial.keyboard.press('Escape');
+  const { p: solo, c: sc } = await client(); await solo.goto(base); await solo.locator('#create-button').click();
+  let expected = 0;
+  for (let i = 0; i < 10; i++) {
+   await ready(solo); const q = await question(solo);
+   if (i === 1) { await pick(solo, 50); await reveal(solo); assert.equal(await solo.locator('.square.filled').count(), 0); assert.equal(await solo.locator('.answer-item.self .answer-number>span').innerText(), '—'); await capture(solo, 'timeout-cleared'); }
+   else { let value = i === 0 ? 0 : q.answer; await pick(solo, value); await solo.locator('#main-action').click(); await reveal(solo); expected += score(Math.abs(value - q.answer)); assert.equal(await solo.locator('.square.filled').count(), value); }
+   assert.equal(await solo.locator('.answer-item.actual .answer-number>span').innerText(), q.answer_label?.replace('%', '') || String(q.answer));
+   await solo.locator('#question-info').click(); assert.equal(await solo.locator('#info-content a').getAttribute('href'), q.source_url); await solo.locator('#info-close').click();
+   await capture(solo, `solo-${q.id}`);
+   if (i === 0) for (const v of [{width:360,height:640},{width:390,height:844},{width:430,height:932},{width:768,height:1024},{width:1440,height:900},{width:844,height:390}]) {
+    await solo.setViewportSize(v); const m = await solo.evaluate(() => { const cell = document.querySelector('.square').getBoundingClientRect(), grid = document.querySelector('#squares').getBoundingClientRect(), button = document.querySelector('#main-action').getBoundingClientRect(); return { width: innerWidth, height: innerHeight, horizontalOverflow: document.documentElement.scrollWidth > innerWidth, buttonBottom: button.bottom, cellWidth: cell.width, gridWidth:grid.width }; });
+    assert.equal(m.horizontalOverflow, false); assert(m.buttonBottom <= v.height + 1, `CTA outside ${v.width}x${v.height}: ${m.buttonBottom}`); results.viewports.push(m); await capture(solo, `reveal-${v.width}x${v.height}`);
+   }
+   await solo.setViewportSize({width:390,height:844}); await next(solo);
+  }
+  await solo.locator('.solo-final').waitFor(); assert.match(await solo.locator('.final-points').innerText(), new RegExp('^'+expected));
+  await solo.evaluate(() => {Object.defineProperty(navigator,'share',{configurable:true,value:async()=>{throw Error('QA denied')}});Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw Error('QA denied')}}})});
+  await solo.locator('#share-result').click(); await solo.locator('#share-fallback').waitFor(); assert.match(await solo.locator('#share-fallback').inputValue(), /Among8/); await capture(solo,'share-fallback');
+  await solo.locator('#rematch').click(); await ready(solo); await sc.setOffline(true); await solo.locator('#leave-room').click(); await solo.locator('#error').waitFor(); assert(await solo.evaluate(()=>!!localStorage.getItem('among8-session'))); assert(await solo.locator('.board').isVisible()); await sc.setOffline(false); await solo.locator('#leave-room').click(); await solo.locator('#setup').waitFor(); assert.equal(await solo.evaluate(()=>localStorage.getItem('among8-session')),null);
+  console.log('Solo + practice + layout + offline exit passed.');
+  const {p:host}=await client(), {p:guest,c:gc}=await client(360,640); await host.goto(base); await host.locator('[data-mode="duel"]').click(); await host.locator('[data-question-set="2"]').click(); await host.locator('[data-avatar="lime"]').click(); await host.locator('#create-button').click(); await host.locator('.invite-code').waitFor(); const code=await host.locator('.invite-code').innerText();
+  await guest.goto(base+'/?room='+code); await guest.waitForFunction(()=>document.querySelector('[data-avatar="lime"]').disabled); await guest.locator('[data-avatar="peach"]').click(); await guest.locator('#create-button').click(); await host.getByRole('heading',{name:'Оба здесь. Начинаем?'}).waitFor(); await host.locator('#start-match').click();
+  for(let i=0;i<10;i++){
+   await Promise.all([ready(host),ready(guest)]);const q=await question(host);await pick(host,q.answer);await pick(guest,i===0?37:q.answer);const ownColor=await guest.locator('.answer-item.self').evaluate(e=>getComputedStyle(e).color);
+   if(i===0)await capture(guest,'guest-before');await host.locator('#main-action').click();await guest.locator('#main-action').click();await Promise.all([reveal(host),reveal(guest)]);
+   assert.equal(await guest.locator('.answer-item').first().getAttribute('class'),'answer-item self');assert.equal(await guest.locator('.answer-item.self').evaluate(e=>getComputedStyle(e).color),ownColor);assert.match(await guest.locator('.answer-item.self p').innerText(),/Ты · Буба/);
+   if(i===0){await capture(guest,'guest-after');assert.equal(await guest.locator('.square.filled').count(),37);}
+   if(i===1){await guest.reload();await reveal(guest);assert.match(await guest.locator('.round-count').innerText(),/2 \/ 10/);}
+   await capture(host,`duel-${q.id}`);await next(host);
+   if(i===9){await host.locator('.final').waitFor();assert(await guest.locator('.result-box').isVisible());await host.locator('#rematch').click();await next(guest);await guest.locator('.final').waitFor();await guest.reload();await guest.locator('.final').waitFor();await guest.locator('#rematch').click();await Promise.all([ready(host),ready(guest)]);}
+   else await next(guest);
+  }
+  await host.locator('#leave-room').click();await guest.getByRole('heading',{name:'Дуэль завершена'}).waitFor();
+  const {p:expired,c:ec}=await client();await ec.addInitScript(()=>localStorage.setItem('among8-session',JSON.stringify({code:'ABCDEFGH',token:'a'.repeat(64)})));await expired.route('**/api/rooms/ABCDEFGH**',r=>r.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Комната недоступна'})}));await expired.goto(base+'/?room=ABCDEFGH');await expired.locator('#return-home').waitFor();assert.equal(await expired.evaluate(()=>localStorage.getItem('among8-session')),null);await expired.locator('#return-home').click();await expired.locator('#create-button').waitFor();assert(await expired.locator('#create-button').isEnabled());
+  assert.equal(new Set(results.seen).size,20);assert.deepEqual(errors,[]);results.passed=true;console.log('Duel + stable identity + independent final + rematch + recovery passed.');
+ } finally {results.errors=errors;fs.writeFileSync(path.join(out,'qa-results.json'),JSON.stringify(results,null,2));await b.close()}
+})().catch(e=>{console.error(e);process.exitCode=1});

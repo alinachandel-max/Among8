@@ -6,7 +6,7 @@ import { questionIcon } from './question-icons.js';
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const avatarNames = { plum: 'Зубик', lime: 'Кваки', peach: 'Буба', sky: 'Глазик' };
-const state = { mode: 'duel', questionSet: 1, avatar: 'plum', availability: null, availabilityTimer: null, availabilityLoading: false, session: null, room: null, selected: null, pending: false, renderKey: '', pollTimer: null, syncing: false, serverOffset: 0, lastTick: null, lastPhase: '', draftToken: null, pointer: null };
+const state = { mode: 'solo', practice: false, questionSet: 1, avatar: 'plum', availability: null, availabilityTimer: null, availabilityLoading: false, session: null, room: null, selected: null, pending: false, renderKey: '', pollTimer: null, syncing: false, serverOffset: 0, lastTick: null, lastPhase: '', draftToken: null, pointer: null };
 const makeToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join('');
 const serverTime = () => performance.now() + state.serverOffset;
 const self = () => state.room?.players.find(p => p?.slot === state.room.role);
@@ -69,7 +69,9 @@ function updateCharacterChoices(busy = state.pending) {
   $('join-button').disabled = busy || !state.avatar || blockedRoom;
   $('create-button').textContent = state.mode === 'solo' ? 'Играть одному →' : validCode ? 'Присоединиться к дуэли →' : 'Создать дуэль →';
   $('join-button').hidden = state.mode === 'solo' || validCode;
+  $('join-details').hidden = state.mode === 'solo';
   $('character-status').textContent = availability?.message || (validCode && !availability ? 'Проверяем свободных персонажей…' : occupied.length ? `${occupied.map(id => avatarNames[id]).join(', ')} уже занят${occupied.length > 1 ? 'ы' : ''}. Выбери свободного персонажа.` : '');
+  $('selected-character').textContent = state.avatar ? `Ты — ${avatarNames[state.avatar]}` : 'Выбери персонажа';
   updateHeroCharacter(occupied);
 }
 function updateHeroCharacter(occupied = []) {
@@ -112,7 +114,7 @@ async function sync() {
     if (state.session !== session) return;
     $('connection').hidden = false;
     $('connection').textContent = error.status === 404 ? 'Комната больше недоступна. Можно создать новую дуэль.' : 'Восстанавливаем связь… Таймер продолжает идти на сервере.';
-    if (error.status === 404 || error.status === 403) { state.session = null; $('room-view').insertAdjacentHTML('beforeend', '<button id="return-home" class="button secondary">Новая дуэль</button>'); $('return-home').onclick = returnHome; }
+    if ([401, 403, 404].includes(error.status)) recoverSession();
   } finally { state.syncing = false; schedulePoll(document.hidden ? 2200 : 850); }
 }
 
@@ -124,7 +126,8 @@ async function act(action, body = {}) {
     if (state.session !== session) return;
     applyRoom(room);
     if (action === 'answer') playSound('lock');
-  } catch (error) { showError(error.message || 'Не удалось отправить ответ. Попробуй ещё раз.'); schedulePoll(50); }
+    return true;
+  } catch (error) { if ([401, 403, 404].includes(error.status)) recoverSession(); else { showError(action === 'leave' ? 'Нет связи. Повтори выход.' : 'Нет связи. Попробуй ещё раз.'); schedulePoll(50); } return false; }
   finally { state.pending = false; updateLive(); }
 }
 
@@ -134,6 +137,7 @@ function applyRoom(room) {
   const newRound = `${room.code}:${room.round}:${room.phase === 'finished'}`;
   if (oldRound !== newRound && room.phase === 'playing') { state.selected = null; state.lastTick = null; showError(''); }
   state.room = room;
+  if (room.phase === 'reveal' || room.phase === 'finished' || self()?.answered) state.selected = self()?.answer ?? null;
   state.questionSet = room.questionSet || 1;
   document.body.classList.toggle('in-game', ['playing', 'reveal'].includes(room.phase));
     const key = `${room.code}:${room.phase}:${room.round}:${room.players.map(p => `${p?.name}:${p?.avatar}`).join(':')}`;
@@ -147,7 +151,7 @@ function applyRoom(room) {
     else renderBoard();
     mountCharacters(); $('room-view').querySelector('h1')?.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'instant' });
-    if (room.phase === 'reveal') { playSound(revealSound(room.history.at(-1), room.mode)); setCharacterMood('surprise'); $('live').textContent = `${room.players.filter(Boolean).map(p => `${p.name}: ${p.answer === null ? 'нет ответа' : p.answer + ' процентов'}`).join('. ')}. Реальность: ${room.question.answer} процентов.`; }
+    if (room.phase === 'reveal') { playSound(room.players.some(p => p && p.answer === null) ? 'tick' : revealSound(room.history.at(-1), room.mode)); setCharacterMood('surprise'); $('live').textContent = `${room.players.filter(Boolean).map(p => `${p.name}: ${p.answer === null ? 'нет ответа' : p.answer + ' процентов'}`).join('. ')}. Реальность: ${room.question.answer} процентов.`; }
     if (room.phase === 'finished') { playSound('win'); setCharacterMood('happy'); }
   }
   if (self()?.answer !== null && self()?.answer !== undefined) state.selected = self().answer;
@@ -160,7 +164,7 @@ function playerMarkup(player, isSelf, final = false) {
 }
 function renderLobby() {
   const room = state.room;
-  $('room-view').innerHTML = `<div class="lobby"><p class="eyebrow">РАУНД ${room.questionSet || 1} · 10 ВОПРОСОВ</p><h1 tabindex="-1">${room.players[1] ? 'Оба здесь. Начинаем?' : 'Позови своего соперника'}</h1><div class="versus-line">${playerMarkup(room.players[0], room.role === 'host')}<span class="versus">vs</span>${playerMarkup(room.players[1], room.role === 'guest')}</div><div class="invite"><p>Код вашей комнаты</p><div class="invite-code">${room.code}</div><button id="copy-invite" class="button secondary">Скопировать приглашение</button><input id="invite-fallback" readonly hidden aria-label="Ссылка для приглашения"><p id="invite-status" class="small" role="status"></p></div><button id="start-match" class="button primary" ${room.role !== 'host' || !room.players[1] ? 'disabled' : ''}>${room.role === 'host' ? 'Начать дуэль' : 'Ждём, когда создатель начнёт'}</button><p class="small">На каждый вопрос — 15 секунд.<br>Не успел отправить ответ — 0 баллов.</p><button id="leave-room" class="text-button">Выйти из комнаты</button></div>`;
+  $('room-view').innerHTML = `<div class="lobby"><p class="eyebrow">НАБОР ${room.questionSet || 1} · 10 ВОПРОСОВ</p><h1 tabindex="-1">${room.players[1] ? 'Оба здесь. Начинаем?' : 'Позови своего соперника'}</h1><div class="versus-line">${playerMarkup(room.players[0], room.role === 'host')}<span class="versus">vs</span>${playerMarkup(room.players[1], room.role === 'guest')}</div><div class="invite"><p>Код вашей комнаты</p><div class="invite-code">${room.code}</div><button id="copy-invite" class="button secondary">Скопировать приглашение</button><input id="invite-fallback" readonly hidden aria-label="Ссылка для приглашения"><p id="invite-status" class="small" role="status"></p></div><button id="start-match" class="button primary" ${room.role !== 'host' || !room.players[1] ? 'disabled' : ''}>${room.role === 'host' ? 'Начать дуэль' : 'Ждём, когда создатель начнёт'}</button><button id="leave-room" class="text-button">Выйти из комнаты</button></div>`;
   $('copy-invite').onclick = copyInvite; $('start-match').onclick = () => { unlockSound(); act('start'); }; $('leave-room').onclick = leaveRoom;
 }
 async function copyInvite() {
@@ -168,54 +172,86 @@ async function copyInvite() {
   try { await navigator.clipboard.writeText(url.href); $('invite-status').textContent = 'Ссылка скопирована. Отправь её другу.'; }
   catch { $('invite-fallback').hidden = false; $('invite-fallback').value = url.href; $('invite-fallback').select(); $('invite-status').textContent = 'Скопируй ссылку из поля выше.'; }
 }
+const orderedPlayers = () => [self(), opponent()].filter(Boolean);
 function renderBoard() {
   const room = state.room, revealed = room.phase === 'reveal', q = room.question;
-  const progress = `<span class="round-count">Раунд ${room.questionSet || 1} · ${String(room.round + 1).padStart(2, '0')}/10</span>`;
-  const scores = room.players.filter(Boolean).map(p => `<span class="score-item ${p.slot}">${escape(p.name)}${p.slot === room.role ? ' · ты' : ''}: <strong data-player-score="${p.slot}">${p.score}</strong></span>`).join('');
-  const scope = q.scope || q.category;
-  const age = q.ageMin ? `<span class="age-label">${q.ageMin} ЛЕТ И СТАРШЕ</span>` : '';
-  const year = q.year_kind === 'reference' ? '' : `<span class="question-year">${q.year}</span>`;
-  const info = `<details class="question-details"><summary aria-label="Уточнение к вопросу">i</summary><p>${escape(q.context)}</p></details>`;
-  const toolbar = `<div class="selector-toolbar"><button id="zero" class="end" aria-label="Выбрать 0 процентов">0%</button><button id="minus" class="step" aria-label="Уменьшить на один" ${revealed ? 'disabled' : ''}>−</button><span>1 клетка = 1%</span><button id="plus" class="step" aria-label="Увеличить на один" ${revealed ? 'disabled' : ''}>+</button><button id="hundred" class="end" aria-label="Выбрать 100 процентов">100%</button></div>`;
-  $('room-view').innerHTML = `<div class="board ${revealed ? 'is-revealed' : 'is-choosing'}"><div class="question"><div class="question-meta">${progress}<span class="population-scope">${escape(scope)}</span>${age}${year}${info}</div><h1 tabindex="-1">${escape(q.text)}</h1>${q.shortNote ? `<p class="question-context">${escape(q.shortNote)}</p>` : ''}</div><div class="field-head"><div id="answer-values" class="answers ${revealed ? 'round-scores' : 'single'}"></div><div class="field-timer" ${revealed ? 'hidden' : ''}><span id="timer" class="timer" aria-label="Осталось секунд">15</span><span>сек.</span></div></div><div id="squares" class="squares" data-theme="${escape(q.icon || 'spark')}" role="slider" tabindex="${revealed ? '-1' : '0'}" aria-label="Твой ответ в процентах" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Ответ не выбран">${Array.from({ length: 100 }, (_, i) => `<span class="square" data-value="${i + 1}" aria-hidden="true">${questionIcon(q.icon)}</span>`).join('')}</div>${toolbar}${revealed ? '' : '<p id="countdown-note" class="countdown-note"></p>'}<div class="actions"><button id="main-action" class="button primary" disabled>${revealed ? room.round === 9 ? 'Посмотреть результат' : 'Следующий вопрос' : 'Ответить'}</button><p id="opponent-status" class="opponent-status"></p></div><div class="score-strip" aria-label="Общий счёт">${scores}</div>${revealed ? revealMarkup() : ''}<button id="leave-room" class="text-button">Выйти</button></div>`;
+  const progress = state.practice ? 'Пробный вопрос' : `${room.round + 1} / 10`;
+  const population = [q.scope, q.ageMin ? `${q.ageMin} лет и старше` : ''].filter(Boolean).join(' · ');
+  const toolbar = revealed ? `<div class="field-endpoints"><span id="zero">0%</span><span>Твой ответ</span><span id="hundred">100%</span></div>` : `<div class="selector-toolbar"><button id="zero" class="end" aria-label="Выбрать 0 процентов">0%</button><button id="minus" class="step" aria-label="Уменьшить на один">−</button><span>1 клетка = 1%</span><button id="plus" class="step" aria-label="Увеличить на один">+</button><button id="hundred" class="end" aria-label="Выбрать 100 процентов">100%</button></div>`;
+  $('room-view').innerHTML = `<div class="board ${revealed ? 'is-revealed' : 'is-choosing'} ${state.practice ? 'practice' : ''}"><div class="question"><div class="question-meta"><span class="round-count">${progress}</span><button class="info-link" id="question-info">Инфо</button></div><h1 tabindex="-1">${escape(q.text)}</h1><p class="population-scope">${escape(population)}</p></div><div class="field-head"><div id="answer-values" class="answers ${revealed ? 'round-scores' : 'single'}"></div><div class="field-timer" ${revealed || state.practice ? 'hidden' : ''}><span id="timer" class="timer">15</span><span>сек.</span></div></div><div id="squares" class="squares" data-theme="${escape(q.icon || 'spark')}" role="slider" tabindex="${revealed ? '-1' : '0'}" aria-label="Твой ответ в процентах" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Ответ не выбран">${Array.from({ length: 100 }, (_, i) => `<span class="square" data-value="${i + 1}" aria-hidden="true">${questionIcon(q.icon)}</span>`).join('')}</div>${toolbar}<div class="actions"><button id="main-action" class="button primary" disabled>Ответить</button><p id="opponent-status" class="opponent-status" role="status"></p></div>${revealed ? revealMarkup() : ''}<button id="leave-room" class="text-button" ${state.practice && revealed ? 'hidden' : ''}>${state.practice ? 'Пропустить' : 'Выйти'}</button></div>`;
   if (revealed) {
     const record = room.history.at(-1);
-    $('answer-values').innerHTML = room.players.filter(Boolean).map(p => answerMarkup(p.slot, p.name, p.answer, record[p.slot])).join('') + answerMarkup('actual', 'Реальность', q.answerLabel);
-    for (const p of room.players.filter(Boolean)) if (p.answer !== null) mark(p.answer, p.slot);
+    $('answer-values').innerHTML = orderedPlayers().map(p => answerMarkup(p.slot === room.role ? 'self' : 'other', `${p.slot === room.role ? 'Ты' : 'Друг'} · ${p.name}`, p.answer, state.practice ? null : record[p.slot])).join('') + answerMarkup('actual', 'Реальность', q.answerLabel);
+    for (const p of orderedPlayers()) if (p.answer !== null) mark(p.answer, p.slot === room.role ? 'self' : 'other');
     mark(q.answer, 'actual');
-    $('main-action').onclick = () => act('ready', { round: room.round });
+    $('main-action').onclick = () => state.practice ? finishPractice() : act('ready', { round: room.round });
   } else {
-    $('answer-values').innerHTML = answerMarkup('host', 'Твой ответ', state.selected);
+    $('answer-values').innerHTML = answerMarkup('self', `Ты · ${self().name}`, state.selected, null, true);
     wireSelector(); $('main-action').onclick = submit;
   }
-  $('leave-room').onclick = leaveRoom;
+  $('question-info').onclick = openInfo;
+  $('leave-room').onclick = state.practice ? finishPractice : leaveRoom;
 }
-function answerMarkup(kind, name, value, result = null) {
+function answerMarkup(kind, name, value, result = null, editable = false) {
   const label = value === null ? '—' : String(value).replace('%', '');
-  const score = result ? `<div class="answer-result"><span class="answer-error">${result.error === null ? 'Время вышло' : `Ошибка ${result.error} п.п.`}</span><strong class="answer-gain">+${result.score}</strong></div>` : '';
-  return `<div class="answer-item ${kind}"><div class="answer-number"><span${name === 'Твой ответ' ? ' id="my-value"' : ''}>${escape(label)}</span>${value === null && state.room.phase === 'reveal' ? '' : '<small>%</small>'}</div><p><i class="answer-tag" aria-hidden="true"></i>${escape(name)}</p>${score}</div>`;
+  const score = result ? `<div class="answer-result"><span class="answer-error">${result.error === null ? 'Нет ответа' : `±${result.error}`}</span><strong class="answer-gain">+${result.score}</strong></div>` : '';
+  return `<div class="answer-item ${kind}"><p><i class="answer-tag" aria-hidden="true"></i>${escape(name)}</p><div class="answer-number"><span${editable ? ' id="my-value"' : ''}>${escape(label)}</span>${value === null ? '' : '<small>%</small>'}</div>${score}</div>`;
 }
 function revealMarkup() {
-  const room = state.room, record = room.history.at(-1), error = record.host.error;
-  const disappointed = revealSound(record, room.mode) === 'disappointed';
+  const room = state.room, record = room.history.at(-1), error = record[room.role].error;
+  const missed = orderedPlayers().some(p => p.answer === null);
+  const disappointed = !missed && revealSound(record, room.mode) === 'disappointed';
   const soloTitle = error === null ? 'Время вышло' : error <= 2 ? 'Почти идеально' : error <= 5 ? 'Очень близко' : error <= 10 ? 'Неплохо' : error <= 20 ? 'Мир немного другой' : 'Вот это сюрприз';
-  const title = room.mode === 'solo' ? soloTitle : disappointed ? 'Мир удивил обоих' : record.host.score === record.guest.score ? 'Поровну!' : `${escape(room.players[record.host.score > record.guest.score ? 0 : 1].name)} ближе к реальности`;
-  const year = room.question.year_kind === 'reference' ? 'Справочная оценка' : room.question.year;
-  return `<section class="result-box" data-reaction="${disappointed ? 'disappointed' : 'close'}"><h2>${title}</h2><details class="fact-details"><summary>Факт и источник <span aria-hidden="true">⌄</span></summary><p class="explanation">${escape(room.question.explanation)}</p><div class="source"><span>${escape(room.question.sourceName)} · ${year}</span><a href="${escape(room.question.sourceUrl)}" target="_blank" rel="noopener noreferrer">Подробнее ↗</a></div></details></section>`;
+  const title = state.practice ? 'Вот и весь принцип!' : room.mode === 'solo' ? soloTitle : missed ? 'Не все успели' : disappointed ? 'Мир удивил обоих' : record.host.score === record.guest.score ? 'Поровну!' : `${escape(room.players[record.host.score > record.guest.score ? 0 : 1].name)} ближе!`;
+  return `<section class="result-box" data-reaction="${disappointed ? 'disappointed' : 'close'}"><h2>${title}</h2></section>`;
 }
-function mark(value, kind) { const target = value === 0 ? $('zero') : $('squares').querySelector(`[data-value="${value}"]`); target?.classList.add(`mark-${kind}`); }
-function canAnswer() { const r = state.room; return r?.phase === 'playing' && serverTime() >= r.startAt && serverTime() < r.deadline && !self()?.answered && !state.pending; }
+function mark(value, kind) {
+  const target = value === 0 ? $('zero') : $('squares').querySelector(`[data-value="${value}"]`);
+  if (!target) return;
+  target.classList.add(`mark-${kind}`);
+  const marker = document.createElement('i'); marker.className = `field-marker ${kind}`; marker.setAttribute('aria-hidden', 'true'); target.append(marker);
+}
+function openInfo() {
+  const q = state.room?.question, revealed = state.room && state.room.phase !== 'playing';
+  $('info-content').innerHTML = `${q ? `<h2>${escape(q.text)}</h2><p>${escape(q.context)}</p>${revealed ? `<p>${escape(q.explanation)}</p><p class="small">${escape(q.sourceName)} · ${q.year_kind === 'reference' ? 'Справочная оценка' : q.year}</p><a href="${escape(q.sourceUrl)}" target="_blank" rel="noopener noreferrer">Источник ↗</a>` : `<p class="small">${q.year_kind === 'reference' ? 'Справочная оценка' : `Данные: ${q.year}`}</p>`}` : '<h2>Как играть</h2><p>Выбери процент и нажми «Ответить». Чем ближе к реальности, тем больше баллов.</p>'}<details class="rules-details"><summary>Правила и баллы</summary><p>Одна клетка — 1%. На ответ 15 секунд. Выбранный процент нужно отправить кнопкой. Пропуск — 0 баллов.</p><p>Ошибка в процентных пунктах:<br>0–2 → 100 баллов · 3–5 → 80<br>6–10 → 60 · 11–15 → 40<br>16–20 → 20 · больше 20 → 0</p><p>Средняя ошибка считается только по отправленным ответам. Данные округлены до целого процента. Скорость ответа не даёт бонуса.</p></details>`;
+  $('info-dialog').showModal();
+}
+function startPractice() {
+  if (state.session) return;
+  clearTimeout(state.availabilityTimer); state.practice = true; state.selected = null;
+  const question = { id: 'practice', text: 'Какой процент поверхности Земли покрыт водой?', scope: 'Вся поверхность Земли', icon: 'drop', year: 2018, year_kind: 'reference', answer: 71, answerLabel: '≈71%', context: 'Считаем площадь поверхности Земли, включая сушу и океаны.', explanation: 'Вода покрывает около 71% поверхности нашей планеты.', sourceName: 'USGS', sourceUrl: 'https://www.usgs.gov/water-science-school/science/freshwater-lakes-and-rivers-and-water-cycle' };
+  state.room = { code: 'practice', mode: 'solo', role: 'host', round: 0, phase: 'playing', question, players: [{ slot: 'host', name: avatarNames[state.avatar], avatar: state.avatar, answer: null, answered: false, score: 0, ready: false }], history: [] };
+  $('setup').hidden = true; $('room-view').hidden = false; document.body.classList.add('in-game'); renderBoard(); updateLive();
+  $('room-view').querySelector('h1').focus({ preventScroll: true });
+}
+function finishPractice() {
+  try { localStorage.setItem('among8-practice', 'done'); } catch {}
+  state.practice = false; state.room = null; state.selected = null; state.renderKey = '';
+  document.body.classList.remove('in-game'); $('room-view').hidden = true; $('room-view').innerHTML = ''; $('setup').hidden = false;
+  chooseMode($('room-code').value ? 'duel' : state.mode); mountCharacters(); window.scrollTo(0, 0);
+}
+function recoverSession() {
+  saveSession(null); clearTimeout(state.pollTimer); clearTimeout(state.availabilityTimer);
+  state.room = null; state.renderKey = ''; state.pending = false; state.draftToken = null;
+  $('connection').hidden = true; showError(''); $('setup').hidden = true; $('room-view').hidden = false; document.body.classList.remove('in-game');
+  $('room-view').innerHTML = '<div class="lobby"><h1 tabindex="-1">Комната недоступна</h1><button id="return-home" class="button primary">Начать новую игру</button></div>';
+  $('return-home').onclick = returnHome; $('room-view').querySelector('h1').focus();
+}
+function canAnswer() { const r = state.room; return r?.phase === 'playing' && (state.practice || serverTime() >= r.startAt && serverTime() < r.deadline) && !self()?.answered && !state.pending; }
 function select(value, withSound = true) {
   if (!canAnswer()) return;
   if (withSound) { unlockSound(); playSound('tap'); }
   state.selected = Math.max(0, Math.min(100, Math.round(value))); updateSelection();
 }
 function updateSelection() {
-  if ($('my-value')) $('my-value').textContent = state.selected ?? '—';
+  if ($('my-value')) { $('my-value').textContent = state.selected ?? '—'; const number = $('my-value').parentElement; if (state.selected !== null && !number.querySelector('small')) number.insertAdjacentHTML('beforeend', '<small>%</small>'); }
   const grid = $('squares'); if (!grid) return;
   grid.querySelectorAll('.square').forEach((cell, i) => cell.classList.toggle('filled', state.selected !== null && i < state.selected));
   grid.setAttribute('aria-valuenow', String(state.selected ?? 0)); grid.setAttribute('aria-valuetext', state.selected === null ? 'Ответ не выбран' : `${state.selected} процентов`);
-  if ($('main-action') && state.room.phase === 'playing') $('main-action').disabled = !canAnswer() || state.selected === null;
+  if ($('main-action') && state.room.phase === 'playing') {
+    $('main-action').disabled = !canAnswer() || state.selected === null;
+    if (canAnswer()) $('main-action').textContent = state.selected === null ? 'Выбери процент' : `Ответить: ${state.selected}%`;
+  }
 }
 function wireSelector() {
   const grid = $('squares');
@@ -232,11 +268,25 @@ function wireSelector() {
   grid.onkeydown = event => { const changes = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 10, PageDown: -10 }; if (event.key in changes) { event.preventDefault(); select((state.selected ?? 0) + changes[event.key]); } else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); select(event.key === 'Home' ? 0 : 100); } else if (event.key === 'Enter' && !event.repeat) { event.preventDefault(); submit(); } };
   $('zero').onclick = () => select(0); $('hundred').onclick = () => select(100); $('minus').onclick = () => select((state.selected ?? 1) - 1); $('plus').onclick = () => select((state.selected ?? 0) + 1);
 }
-function submit() { if (canAnswer() && state.selected !== null) act('answer', { value: state.selected, round: state.room.round }); }
+function submit() {
+  if (!canAnswer() || state.selected === null) return;
+  if (!state.practice) { act('answer', { value: state.selected, round: state.room.round }); return; }
+  const me = self(), error = Math.abs(state.selected - state.room.question.answer);
+  me.answer = state.selected; me.answered = true; state.room.phase = 'reveal'; state.room.revealAt = performance.now();
+  state.room.history = [{ host: { answer: me.answer, error, score: 0 }, guest: { answer: null, error: null, score: 0 } }];
+  renderBoard(); playSound('reveal'); updateLive();
+}
 
 function updateLive() {
   const room = state.room; if (!room) return;
   const me = self(), other = opponent();
+  if (state.practice) {
+    const revealed = room.phase === 'reveal'; updateSelection();
+    $('main-action').disabled = revealed ? performance.now() < room.revealAt + 700 : state.selected === null;
+    $('main-action').textContent = revealed ? 'Играть' : state.selected === null ? 'Выбери процент' : `Ответить: ${state.selected}%`;
+    $('squares').setAttribute('aria-disabled', String(revealed));
+    return;
+  }
   if (room.phase === 'waiting' && $('start-match')) $('start-match').disabled = state.pending || room.role !== 'host' || !room.players[1];
   if (!['playing', 'reveal', 'finished'].includes(room.phase)) return;
   if (room.phase === 'playing') {
@@ -245,23 +295,21 @@ function updateLive() {
     $('timer').classList.toggle('urgent', !counting && remaining <= 5);
     $('timer').setAttribute('aria-label', counting ? 'Отсчёт до начала' : `Осталось ${remaining} секунд`);
     $('time-fill')?.style.setProperty('--remaining', String(counting ? 1 : Math.max(0, Math.min(1, (room.deadline - now) / 15000))));
-    $('countdown-note').textContent = counting ? 'Сейчас начнём. Приготовься!' : remaining === 0 ? 'Время вышло. Сравниваем…' : '';
-    $('main-action').textContent = state.pending ? 'Отправляем…' : me.answered ? 'Ответ принят' : remaining === 0 ? 'Время вышло' : 'Ответить';
+    $('main-action').textContent = state.pending ? 'Отправляем…' : me.answered ? 'Ответ принят' : remaining === 0 ? 'Время вышло' : counting ? 'Приготовься…' : state.selected === null ? 'Выбери процент' : `Ответить: ${state.selected}%`;
     $('squares').setAttribute('aria-disabled', String(!canAnswer()));
     for (const id of ['zero', 'hundred', 'minus', 'plus']) if ($(id)) $(id).disabled = !canAnswer();
     updateSelection();
-    $('opponent-status').textContent = room.mode === 'solo' ? '' : !other.connected ? `${other.name}: восстанавливаем связь. Можно вернуться в комнату.` : other.answered ? `${other.name}: ответ принят` : `${other.name} выбирает ответ`;
+    $('opponent-status').textContent = room.mode === 'solo' ? '' : !other.connected ? `${other.name} не в сети` : other.answered ? `${other.name} ответил` : `${other.name} выбирает`;
     const tick = counting ? `start-${Math.ceil((room.startAt - now) / 1000)}` : String(remaining);
     if (tick !== state.lastTick) { if (counting || remaining > 0 && remaining <= 5 && !me.answered) playSound('tick'); if (!counting && state.lastTick?.startsWith('start')) playSound('start'); state.lastTick = tick; }
   } else if (room.phase === 'reveal') {
-    $('timer').textContent = '✓'; $('timer').setAttribute('aria-label', 'Ответы раскрыты'); $('time-fill')?.style.setProperty('--remaining', '0');
     $('main-action').disabled = state.pending || me.ready || serverTime() < room.revealAt + 1000;
-    $('main-action').textContent = me.ready ? 'Ждём соперника…' : room.round === 9 ? 'Посмотреть результат' : 'Следующий вопрос';
-    $('opponent-status').textContent = room.mode === 'solo' ? '' : other.ready ? `${other.name}: можно продолжать` : 'Продолжим, когда вы оба будете готовы';
-    $('zero').disabled = true; $('hundred').disabled = true; $('squares').setAttribute('aria-disabled', 'true'); updateSelection();
+    $('main-action').textContent = me.ready ? 'Ждём соперника…' : room.round === 9 ? 'Результат' : 'Следующий вопрос';
+    $('opponent-status').textContent = room.mode === 'solo' ? '' : other.ready ? `${other.name}: можно продолжать` : 'Ждём двоих';
+    $('zero')?.setAttribute('aria-disabled', 'true'); $('hundred')?.setAttribute('aria-disabled', 'true'); $('squares').setAttribute('aria-disabled', 'true'); updateSelection();
   } else if ($('rematch')) {
-    $('rematch').disabled = state.pending || me.ready; $('rematch').textContent = room.mode === 'solo' ? 'Сыграть ещё раз' : me.ready ? 'Ждём согласия соперника…' : 'Сыграть реванш';
-    $('rematch-status').textContent = room.mode === 'solo' ? 'Те же факты, новый порядок' : other.ready ? `${other.name} предлагает реванш` : 'Реванш начнётся, когда согласитесь оба';
+    $('rematch').disabled = state.pending || me.ready; $('rematch').textContent = room.mode === 'solo' ? 'Сыграть ещё раз' : me.ready ? 'Ждём друга…' : 'Сыграть реванш';
+    $('rematch-status').textContent = room.mode === 'solo' ? 'Те же факты, новый порядок' : other.ready ? `${other.name} предлагает реванш` : 'Новая игра по согласию обоих';
   }
 }
 
@@ -269,23 +317,31 @@ function renderFinal() {
   if (state.room.mode === 'solo') { renderSoloFinal(); return; }
   const room = state.room, [a, b] = room.players; const title = a.score === b.score ? 'Интуиция на равных!' : `${escape(a.score > b.score ? a.name : b.name)} выигрывает!`;
   const stat = slot => { const valid = room.history.map(r => r[slot].error).filter(e => e !== null); return { average: valid.length ? (valid.reduce((a, b) => a + b, 0) / valid.length).toLocaleString('ru-RU', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) : '—', missed: 10 - valid.length }; };
-  $('room-view').innerHTML = `<div class="final"><p class="eyebrow">РАУНД ${room.questionSet || 1} · РЕЗУЛЬТАТ</p><h1 tabindex="-1">${title}</h1><div class="versus-line">${room.players.map((p, i) => `${i ? '<span class="versus">vs</span>' : ''}<div>${playerMarkup(p, p.slot === room.role, true)}<p class="final-average">Средняя ошибка: ${stat(p.slot).average} п.п.<br>Без ответа: ${stat(p.slot).missed}</p></div>`).join('')}</div><p class="small">Средняя ошибка — по отправленным ответам.</p><button id="rematch" class="button primary">Сыграть реванш</button><p id="rematch-status" class="small"></p><button id="share-result" class="button secondary">Поделиться результатом</button><p id="share-status" class="small" role="status"></p><button id="leave-room" class="text-button">Новая дуэль с другим другом</button></div>`;
+  $('room-view').innerHTML = `<div class="final"><p class="eyebrow">НАБОР ${room.questionSet || 1} · РЕЗУЛЬТАТ</p><h1 tabindex="-1">${title}</h1><div class="versus-line">${room.players.map((p, i) => `${i ? '<span class="versus">vs</span>' : ''}<div>${playerMarkup(p, p.slot === room.role, true)}<p class="final-average">Средняя ошибка: ${stat(p.slot).average} п.п.<br>Без ответа: ${stat(p.slot).missed}</p></div>`).join('')}</div><button id="rematch" class="button primary">Сыграть реванш</button><p id="rematch-status" class="small"></p><button id="share-result" class="button secondary">Поделиться результатом</button><p id="share-status" class="small" role="status"></p><textarea id="share-fallback" readonly hidden aria-label="Результат для копирования"></textarea><button id="leave-room" class="text-button">Новая дуэль с другим другом</button></div>`;
   $('rematch').onclick = () => act('rematch', { round: room.round }); $('share-result').onclick = shareResult; $('leave-room').onclick = leaveRoom;
 }
 async function shareResult() {
-  const text = `Among8 — раунд ${state.room.questionSet || 1}\n\n${state.room.players.filter(Boolean).map(p => `${p.name}: ${p.score} / 1000`).join('\n')}\n\nНасколько хорошо ты знаешь мир?`;
-  try { if (navigator.share) await navigator.share({ title: 'Among8', text, url: location.href.split('?')[0] }); else { await navigator.clipboard.writeText(text); $('share-status').textContent = 'Результат скопирован.'; } }
-  catch (error) { if (error.name !== 'AbortError') { $('share-status').textContent = text; } }
+  const room = state.room;
+  const text = `Among8 · набор ${room.questionSet || 1}\n\n${room.players.filter(Boolean).map(p => `${p.name}: ${p.score} / 1000`).join('\n')}\n\nНасколько хорошо ты знаешь мир?`;
+  const url = location.href.split('?')[0];
+  try { if (navigator.share) { await navigator.share({ title: 'Among8', text, url }); return; } }
+  catch (error) { if (error.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(`${text}\n${url}`); if (state.room === room && $('share-status')) $('share-status').textContent = 'Скопировано'; }
+  catch { if (state.room !== room || !$('share-fallback')) return; $('share-fallback').hidden = false; $('share-fallback').value = `${text}\n${url}`; $('share-fallback').focus(); $('share-fallback').select(); $('share-status').textContent = 'Скопируй текст'; }
 }
 function renderClosed() { $('room-view').innerHTML = '<div class="lobby"><h1 tabindex="-1">Дуэль завершена</h1><p class="lead">Один из игроков вышел из комнаты.</p><button id="return-home" class="button primary">Создать новую дуэль</button></div>'; $('return-home').onclick = returnHome; }
-async function leaveRoom() { if (state.pending) return; await act('leave'); returnHome(); }
+async function leaveRoom() {
+  if (state.pending) return;
+  if (state.room?.mode === 'duel' && !['closed', 'finished'].includes(state.room.phase) && !window.confirm('Выйти из дуэли?')) return;
+  if (await act('leave')) returnHome();
+}
 function returnHome() { document.body.classList.remove('in-game'); const previous = self(); if (previous) { state.avatar = previous.avatar; $('avatar-options').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.avatar === state.avatar))); } clearTimeout(state.pollTimer); saveSession(null); Object.assign(state, { room: null, renderKey: '', selected: null, pending: false, draftToken: null }); $('room-view').hidden = true; $('room-view').innerHTML = ''; $('setup').hidden = false; $('connection').hidden = true; $('room-code').value = ''; showError(''); history.replaceState(null, '', location.pathname); chooseMode(state.mode); mountCharacters(); window.scrollTo({ top: 0, behavior: 'instant' }); }
 
 function renderSoloFinal() {
   const room = state.room, p = room.players[0], valid = room.history.map(r => r.host.error).filter(e => e !== null);
   const average = valid.length ? (valid.reduce((a, b) => a + b, 0) / valid.length).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '—';
   const verdict = p.score >= 900 ? 'Ты пугающе хорошо понимаешь мир.' : p.score >= 750 ? 'Твоя интуиция работает.' : p.score >= 550 ? 'Мир иногда удивляет тебя.' : p.score >= 350 ? 'Реальность оказалась страннее.' : 'Похоже, Земля устроена совсем не так, как кажется.';
-  $('room-view').innerHTML = `<div class="final solo-final"><p class="eyebrow">РАУНД ${room.questionSet || 1} · РЕЗУЛЬТАТ</p><h1 tabindex="-1">${escape(p.name)}, вот твой результат</h1>${playerMarkup(p, true, true)}<p class="final-average">Средняя ошибка: ${average} п.п.<br>Без ответа: ${10 - valid.length}</p><div class="summary"><h2>${verdict}</h2><p>Средняя ошибка считается по отправленным ответам.<br>За пропущенные вопросы — 0 баллов.</p></div><button id="rematch" class="button primary">Сыграть ещё раз</button><p id="rematch-status" class="small"></p><button id="share-result" class="button secondary">Поделиться результатом</button><p id="share-status" class="small" role="status"></p><button id="leave-room" class="text-button">Выбрать другой режим</button></div>`;
+  $('room-view').innerHTML = `<div class="final solo-final"><p class="eyebrow">НАБОР ${room.questionSet || 1} · РЕЗУЛЬТАТ</p><h1 tabindex="-1">${escape(p.name)}, вот твой результат</h1>${playerMarkup(p, true, true)}<p class="final-average">Средняя ошибка: ${average} п.п.<br>Без ответа: ${10 - valid.length}</p><div class="summary"><h2>${verdict}</h2></div><button id="rematch" class="button primary">Сыграть ещё раз</button><p id="rematch-status" class="small"></p><button id="share-result" class="button secondary">Поделиться результатом</button><p id="share-status" class="small" role="status"></p><textarea id="share-fallback" readonly hidden aria-label="Результат для копирования"></textarea><button id="leave-room" class="text-button">Выбрать другой режим</button></div>`;
   $('rematch').onclick = () => act('rematch', { round: room.round }); $('share-result').onclick = shareResult; $('leave-room').onclick = leaveRoom;
 }
 function chooseMode(mode) {
@@ -296,7 +352,7 @@ function chooseMode(mode) {
   if (mode === 'solo') $('room-code').value = '';
   document.querySelector('.intro-duo').classList.toggle('is-solo', mode === 'solo');
   document.querySelector('.setup h1').innerHTML = mode === 'solo' ? 'Насколько хорошо<br>ты знаешь мир?' : 'Чья интуиция<br>ближе к правде?';
-  document.querySelector('.setup .eyebrow').textContent = mode === 'solo' ? 'ТВОЯ ИНТУИЦИЯ. И РЕАЛЬНОСТЬ.' : 'ВЫ ДВОЕ. И РЕАЛЬНОСТЬ.';
+
   showError('');
   checkAvailability();
 }
@@ -318,8 +374,15 @@ function initialize() {
   document.addEventListener('keydown', event => { if (event.repeat && ['Enter', ' '].includes(event.key)) event.preventDefault(); });
   const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
   if (code) { $('room-code').value = code; $('create-button').textContent = 'Присоединиться к дуэли →'; $('join-button').hidden = true; }
-  checkAvailability();
+  chooseMode(code ? 'duel' : 'solo');
+  $('join-details').open = !!code;
+  $('info-open').onclick = openInfo;
+  $('info-close').onclick = () => $('info-dialog').close();
+  $('practice-again').onclick = startPractice;
+  document.querySelector('header .brand').onclick = event => { event.preventDefault(); if (state.practice) finishPractice(); else if (state.session) leaveRoom(); else window.scrollTo(0, 0); };
   try { const saved = JSON.parse(localStorage.getItem('among8-session')); if (saved?.code && /^[a-f0-9]{64}$/.test(saved.token) && (!code || code === saved.code)) { saveSession(saved); state.draftToken = saved.token; sync(); } } catch {}
+  let practiced = false; try { practiced = localStorage.getItem('among8-practice') === 'done'; } catch {}
+  if (!state.session && !practiced) startPractice();
   mountCharacters();
   setInterval(updateLive, 100);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { unlockSound(); schedulePoll(0); } });

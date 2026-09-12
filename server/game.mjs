@@ -29,7 +29,7 @@ function identity(body) {
 
 export function createGameHandler({ questions, clock = Date.now, countdownMs = 3000, roundMs = ROUND_MS }) {
   const byId = new Map(questions.map(q => [q.id, q]));
-  const questionSets = new Map([1, 2].map(set => [set, questions.filter(q => (q.question_set || 1) === set)]));
+  const questionSets = new Map([1, 2].map(set => [set, questions.filter(q => !q.archived && (q.question_set || 1) === set)]));
   const getRoom = (db, code) => db.prepare('SELECT * FROM rooms WHERE code = ?').bind(code).first();
 
   async function rateLimit(db, request, now, action) {
@@ -50,6 +50,7 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       const record = { round: room.round, questionId: question.id, actual: question.answer,
         host: { answer: room.host_answer, error: hostError, score: hostError === null ? 0 : score(hostError) },
         guest: { answer: room.guest_answer, error: guestError, score: guestError === null ? 0 : score(guestError) } };
+      if (room.round === JSON.parse(room.question_ids).length - 1) record.finalSeen = { host: false, guest: false };
       const result = await db.prepare(`UPDATE rooms SET phase = 'reveal', reveal_at = ?, host_ready = 0, guest_ready = 0,
         host_score = host_score + ?, guest_score = guest_score + ?, history = json_insert(history, '$[#]', json(?))
         WHERE code = ? AND phase = 'playing' AND round = ? AND host_answer IS ? AND guest_answer IS ?`)
@@ -61,6 +62,8 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
   }
 
   function view(room, role, now) {
+    const history = JSON.parse(room.history);
+    const awaitingFinal = room.phase === 'finished' && history.at(-1)?.finalSeen?.[role] === false;
     const revealed = room.phase === 'reveal' || room.phase === 'finished';
     const q = byId.get(JSON.parse(room.question_ids)[room.round]);
     const players = ['host', 'guest'].map(slot => room[`${slot}_hash`] ? {
@@ -75,9 +78,9 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       question = { id, category, text, context, year, year_kind, scope, ageMin: age_min, shortNote: short_note, icon };
       if (revealed) Object.assign(question, { answer: q.answer, answerLabel: q.answer_label || `${q.answer}%`, explanation: q.explanation, sourceName: q.source_short || q.source_name, sourceUrl: q.source_url });
     }
-    return { code: room.code, mode: room.mode, questionSet: room.question_set || 1, role, phase: room.phase, round: room.round, totalRounds: JSON.parse(room.question_ids).length,
+    return { code: room.code, mode: room.mode, questionSet: room.question_set || 1, role, phase: awaitingFinal ? 'reveal' : room.phase, round: room.round, totalRounds: JSON.parse(room.question_ids).length,
       serverNow: now, startAt: room.start_at, deadline: room.deadline, revealAt: room.reveal_at,
-      players, question, history: JSON.parse(room.history), expiresAt: room.expires_at };
+      players, question, history, expiresAt: room.expires_at };
   }
 
   async function handle(request, env) {
@@ -86,7 +89,7 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     const url = new URL(request.url); const now = clock();
     if (url.pathname === '/api/health' && request.method === 'GET') {
       await db.prepare('SELECT 1 FROM rooms LIMIT 1').first();
-      return { ok: true, roundMs, questions: questions.length, questionSets: [...questionSets].filter(([, items]) => items.length).map(([id, items]) => ({ id, count: items.length })) };
+      return { ok: true, roundMs, questions: [...questionSets.values()].reduce((sum, items) => sum + items.length, 0), questionSets: [...questionSets].filter(([, items]) => items.length).map(([id, items]) => ({ id, count: items.length })) };
     }
     const availability = url.pathname.match(/^\/api\/rooms\/([A-Z2-9]{8})\/availability$/);
     if (availability && request.method === 'GET') {
@@ -168,21 +171,30 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     } else if (action === 'ready' || action === 'rematch') {
       const body = await readBody(request);
       if (body.round !== room.round) fail(409, 'Состояние игры обновилось.');
-      const expectedPhase = action === 'ready' ? 'reveal' : 'finished';
-      if (room.phase !== expectedPhase) return view(room, role, now);
-      if (now < room.reveal_at + 1000) fail(409, 'Сначала посмотри результат вопроса.');
-      await db.prepare(`UPDATE rooms SET ${role}_ready = 1 WHERE code = ? AND phase = ? AND round = ?`).bind(code, expectedPhase, room.round).run();
-      if (action === 'rematch') {
-        await db.prepare(`UPDATE rooms SET phase = 'playing', round = 0, question_ids = ?, history = '[]', host_score = 0, guest_score = 0,
-          host_answer = NULL, guest_answer = NULL, host_ready = 0, guest_ready = 0, start_at = ?, deadline = ?
-          WHERE code = ? AND phase = 'finished' AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(JSON.stringify(shuffledIds(questionSets.get(room.question_set || 1))), now + countdownMs, now + countdownMs + roundMs, code).run();
-      } else if (room.round === JSON.parse(room.question_ids).length - 1) {
-        await db.prepare(`UPDATE rooms SET phase = 'finished', host_ready = 0, guest_ready = 0
-          WHERE code = ? AND phase = 'reveal' AND round = ? AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(code, room.round).run();
+      const lastRound = room.round === JSON.parse(room.question_ids).length - 1;
+      if (action === 'ready' && lastRound && ['reveal', 'finished'].includes(room.phase)) {
+        if (now < room.reveal_at + 1000) fail(409, 'Сначала посмотри результат вопроса.');
+        // Viewing a final is personal. Rematch votes remain separate from finalSeen.
+        const seenPath = `$[${room.round}].finalSeen.${role}`;
+        await db.prepare(`UPDATE rooms SET phase = 'finished', history = json_set(history, ?, json(COALESCE(json_extract(history, ?), CASE WHEN phase = 'reveal' THEN '{"host":false,"guest":false}' ELSE '{"host":true,"guest":true}' END)), ?, json('true')),
+          host_ready = CASE WHEN phase = 'reveal' THEN 0 ELSE host_ready END,
+          guest_ready = CASE WHEN phase = 'reveal' THEN 0 ELSE guest_ready END
+          WHERE code = ? AND phase IN ('reveal', 'finished') AND round = ?`).bind(`$[${room.round}].finalSeen`, `$[${room.round}].finalSeen`, seenPath, code, room.round).run();
       } else {
-        await db.prepare(`UPDATE rooms SET phase = 'playing', round = round + 1, host_answer = NULL, guest_answer = NULL,
-          host_ready = 0, guest_ready = 0, start_at = ?, deadline = ? WHERE code = ? AND phase = 'reveal' AND round = ?
-          AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(now + countdownMs, now + countdownMs + roundMs, code, room.round).run();
+        const expectedPhase = action === 'ready' ? 'reveal' : 'finished';
+        if (room.phase !== expectedPhase) return view(room, role, now);
+        if (now < room.reveal_at + 1000) fail(409, 'Сначала посмотри результат вопроса.');
+        if (action === 'rematch' && JSON.parse(room.history).at(-1)?.finalSeen?.[role] === false) fail(409, 'Сначала посмотри итог игры.');
+        await db.prepare(`UPDATE rooms SET ${role}_ready = 1 WHERE code = ? AND phase = ? AND round = ?`).bind(code, expectedPhase, room.round).run();
+        if (action === 'rematch') {
+          await db.prepare(`UPDATE rooms SET phase = 'playing', round = 0, question_ids = ?, history = '[]', host_score = 0, guest_score = 0,
+            host_answer = NULL, guest_answer = NULL, host_ready = 0, guest_ready = 0, start_at = ?, deadline = ?
+            WHERE code = ? AND phase = 'finished' AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(JSON.stringify(shuffledIds(questionSets.get(room.question_set || 1))), now + countdownMs, now + countdownMs + roundMs, code).run();
+        } else {
+          await db.prepare(`UPDATE rooms SET phase = 'playing', round = round + 1, host_answer = NULL, guest_answer = NULL,
+            host_ready = 0, guest_ready = 0, start_at = ?, deadline = ? WHERE code = ? AND phase = 'reveal' AND round = ?
+            AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(now + countdownMs, now + countdownMs + roundMs, code, room.round).run();
+        }
       }
     } else if (action === 'leave') {
       await db.prepare(`UPDATE rooms SET phase = 'closed' WHERE code = ?`).bind(code).run();
