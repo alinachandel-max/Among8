@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createGameHandler } from '../server/game.mjs';
 import { openDatabase } from '../scripts/sqlite-adapter.mjs';
+import { revealSound } from '../public/sounds.js';
 const questions = JSON.parse(fs.readFileSync(new URL('../server/questions.json', import.meta.url), 'utf8'));
 const actual = id => questions.find(q => q.id === id).answer;
 const token = n => String(n).padStart(64, 'a');
@@ -149,4 +150,48 @@ test('simultaneous attempts at the host character leave it occupied and guest se
     const solo = await call(3, '/rooms', { avatar: 'lime', mode: 'solo' });
     assert.equal(solo.status, 200); assert.equal(solo.players[0].name, 'Кваки', 'Availability is room-local');
   } finally { db.close(); }
+});
+
+test('round 2 stays a separate ten-question set through joining, completion and rematch', async () => {
+  const { db, call, advance } = setup();
+  try {
+    assert.equal((await call(1, '/rooms', { avatar: 'lime', questionSet: 3 })).status, 400);
+    let room = await call(1, '/rooms', { avatar: 'lime', questionSet: 2 }); const path = '/rooms/' + room.code;
+    assert.equal(room.questionSet, 2); assert.equal(room.totalRounds, 10);
+    assert.equal((await call(9, path + '/availability')).questionSet, 2);
+    room = await call(2, path + '/join', { avatar: 'sky', questionSet: 1 });
+    assert.equal(room.questionSet, 2, 'Guest inherits the host selection');
+    room = await call(1, path + '/start', {}); const seen = new Set();
+    for (let round = 0; round < 10; round++) {
+      advance(3000); assert(room.question.id >= 11 && room.question.id <= 20); seen.add(room.question.id);
+      assert.equal(room.question.answer, undefined); assert(room.question.icon); assert(room.question.scope);
+      const answer = actual(room.question.id);
+      await call(1, path + '/answer', { round, value: answer }); room = await call(2, path + '/answer', { round, value: answer });
+      advance(1001); await call(1, path + '/ready', { round }); room = await call(2, path + '/ready', { round });
+    }
+    assert.equal(seen.size, 10); assert.equal(room.phase, 'finished'); assert.equal(room.players[0].score, 1000);
+    await call(1, path + '/rematch', { round: 9 }); room = await call(2, path + '/rematch', { round: 9 });
+    assert.equal(room.questionSet, 2); assert.equal(room.totalRounds, 10); assert(room.question.id >= 11);
+    const solo = await call(3, '/rooms', { avatar: 'plum', mode: 'solo', questionSet: 2 });
+    assert.equal(solo.phase, 'playing'); assert.equal(solo.questionSet, 2); assert(solo.question.id >= 11);
+  } finally { db.close(); }
+});
+
+test('question data and disappointment sound keep precise age and closeness boundaries', () => {
+  assert.equal(questions.length, 20);
+  assert.equal(questions.filter(q => q.question_set === 1).length, 10);
+  assert.equal(questions.filter(q => q.question_set === 2).length, 10);
+  assert.deepEqual(questions.filter(q => q.question_set === 1).map(q => q.answer), [68, 11, 88, 73, 79, 80, 92, 52, 74, 60]);
+  assert(questions.every(q => q.icon && q.scope && Number.isInteger(q.answer)));
+  assert(questions.every(q => !/\d[,.]?\d*\s*%|три четверти/i.test(q.context)), 'Context visible before reveal must not give away the answer');
+  assert.equal(questions.find(q => q.id === 3).age_min, 15);
+  assert.equal(questions.find(q => q.id === 6).age_min, 10);
+  assert.equal(questions.find(q => q.id === 12).age_min, 18);
+  const record = (a, b) => ({ host: { error: a }, guest: { error: b } });
+  assert.equal(revealSound(record(11, 30), 'duel'), 'disappointed');
+  assert.equal(revealSound(record(null, null), 'duel'), 'disappointed');
+  assert.equal(revealSound(record(10, 30), 'duel'), 'reveal');
+  assert.equal(revealSound(record(30, 0), 'duel'), 'reveal');
+  assert.equal(revealSound(record(11, 0), 'solo'), 'disappointed');
+  assert.equal(revealSound(record(2, null), 'solo'), 'reveal');
 });

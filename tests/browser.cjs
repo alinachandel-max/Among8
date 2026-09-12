@@ -35,7 +35,7 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     await Promise.all([ready(host), ready(guest)]);
     assert.equal(await host.locator('.square').count(), 100);
     await host.locator('.square[data-value="37"]').click(); await guest.locator('.square[data-value="65"]').click();
-    await host.locator('#main-action').click(); await host.getByText('Твой ответ зафиксирован', { exact: true }).waitFor();
+    await host.locator('#main-action').click(); await host.getByRole('button', { name: 'Ответ принят', exact: true }).waitFor();
     assert.equal(await guest.locator('.answers .answer-item').count(), 1, 'No opponent/reality before reveal');
     await guest.locator('#main-action').click(); await host.locator('.result-box').waitFor(); await guest.locator('.result-box').waitFor();
     assert.equal(await host.locator('.answers .answer-item').count(), 3);
@@ -48,7 +48,7 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     await host.setViewportSize({ width: 390, height: 900 });
     await next(); await Promise.all([ready(host), ready(guest)]);
     await host.reload(); await host.locator('.board').waitFor();
-    assert.equal(await host.locator('.round-count').innerText(), '02 / 10', 'Reload resumes the same round');
+    assert.match(await host.locator('.round-count').innerText(), /02\/10/, 'Reload resumes the same question');
     await host.locator('.result-box').waitFor({ timeout: 23000 });
     await guest.locator('.result-box').waitFor({ timeout: 23000 });
     assert.match(await host.locator('.round-scores').innerText(), /Время вышло/);
@@ -62,7 +62,7 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     assert.deepEqual(await host.locator('.final-points').allTextContents(), await guest.locator('.final-points').allTextContents());
     await host.screenshot({ path: path.join(out, 'duel-final.png'), fullPage: true });
     await host.locator('#rematch').click(); await guest.locator('#rematch').click();
-    await host.locator('.board').waitFor(); assert.equal(await host.locator('.round-count').innerText(), '01 / 10');
+    await host.locator('.board').waitFor(); assert.match(await host.locator('.round-count').innerText(), /01\/10/);
     await host.locator('#leave-room').click(); await guest.getByRole('heading', { name: 'Дуэль завершена' }).waitFor();
     console.log('Duel passed: 10 rounds, timeout, reconnection, rematch, synchronized reveal.');
 

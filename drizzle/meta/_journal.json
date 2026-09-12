@@ -15,6 +15,13 @@
       "when": 1789192853577,
       "tag": "0001_brief_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789195003492,
+      "tag": "0002_famous_ted_forrester",
+      "breakpoints": true
     }
   ]
 }

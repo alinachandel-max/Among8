@@ -29,6 +29,7 @@ function identity(body) {
 
 export function createGameHandler({ questions, clock = Date.now, countdownMs = 3000, roundMs = ROUND_MS }) {
   const byId = new Map(questions.map(q => [q.id, q]));
+  const questionSets = new Map([1, 2].map(set => [set, questions.filter(q => (q.question_set || 1) === set)]));
   const getRoom = (db, code) => db.prepare('SELECT * FROM rooms WHERE code = ?').bind(code).first();
 
   async function rateLimit(db, request, now, action) {
@@ -70,11 +71,11 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     } : null);
     let question = null;
     if (room.phase !== 'waiting') {
-      const { id, category, question: text, context, year, year_kind } = q;
-      question = { id, category, text, context, year, year_kind };
+      const { id, category, question: text, context, year, year_kind, scope, age_min, short_note, icon } = q;
+      question = { id, category, text, context, year, year_kind, scope, ageMin: age_min, shortNote: short_note, icon };
       if (revealed) Object.assign(question, { answer: q.answer, answerLabel: q.answer_label || `${q.answer}%`, explanation: q.explanation, sourceName: q.source_short || q.source_name, sourceUrl: q.source_url });
     }
-    return { code: room.code, mode: room.mode, role, phase: room.phase, round: room.round, totalRounds: questions.length,
+    return { code: room.code, mode: room.mode, questionSet: room.question_set || 1, role, phase: room.phase, round: room.round, totalRounds: JSON.parse(room.question_ids).length,
       serverNow: now, startAt: room.start_at, deadline: room.deadline, revealAt: room.reveal_at,
       players, question, history: JSON.parse(room.history), expiresAt: room.expires_at };
   }
@@ -85,7 +86,7 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     const url = new URL(request.url); const now = clock();
     if (url.pathname === '/api/health' && request.method === 'GET') {
       await db.prepare('SELECT 1 FROM rooms LIMIT 1').first();
-      return { ok: true, roundMs, questions: questions.length };
+      return { ok: true, roundMs, questions: questions.length, questionSets: [...questionSets].filter(([, items]) => items.length).map(([id, items]) => ({ id, count: items.length })) };
     }
     const availability = url.pathname.match(/^\/api\/rooms\/([A-Z2-9]{8})\/availability$/);
     if (availability && request.method === 'GET') {
@@ -93,7 +94,7 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       if (!room || room.expires_at <= now) fail(404, 'Комната не найдена или срок приглашения истёк.');
       const occupied = [room.host_avatar, ...(room.guest_hash ? [room.guest_avatar] : [])];
       const canJoin = room.mode === 'duel' && room.phase === 'waiting' && !room.guest_hash;
-      return { code: room.code, occupied, canJoin,
+      return { code: room.code, questionSet: room.question_set || 1, occupied, canJoin,
         message: canJoin ? '' : room.mode === 'solo' ? 'Это одиночная игра. Создай свою дуэль.' : room.phase === 'closed' ? 'Эта дуэль уже закрыта.' : 'В этой комнате уже два игрока.' };
     }
     const rawToken = request.headers.get('authorization')?.replace(/^Bearer /, '') || '';
@@ -102,6 +103,8 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     if (url.pathname === '/api/rooms' && request.method === 'POST') {
       const body = await readBody(request); const person = identity(body);
       const mode = body.mode === 'solo' ? 'solo' : 'duel';
+      const questionSet = body.questionSet ?? 1;
+      if (![1, 2].includes(questionSet) || questionSets.get(questionSet)?.length !== 10) fail(400, 'Выбери раунд 1 или 2.');
       const existing = await db.prepare('SELECT * FROM rooms WHERE host_hash = ? AND expires_at > ?').bind(tokenHash, now).first();
       if (existing) return view(existing, 'host', now);
       await rateLimit(db, request, now, 'create');
@@ -111,8 +114,8 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       ]);
       for (let attempt = 0; attempt < 4; attempt++) {
         const code = roomCode();
-        await db.prepare(`INSERT OR IGNORE INTO rooms (code, mode, host_hash, host_name, host_avatar, host_seen_at, question_ids, created_at, expires_at, phase, start_at, deadline)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(code, mode, tokenHash, person.name, person.avatar, now, JSON.stringify(shuffledIds(questions)), now, now + TTL_MS,
+        await db.prepare(`INSERT OR IGNORE INTO rooms (code, mode, question_set, host_hash, host_name, host_avatar, host_seen_at, question_ids, created_at, expires_at, phase, start_at, deadline)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(code, mode, questionSet, tokenHash, person.name, person.avatar, now, JSON.stringify(shuffledIds(questionSets.get(questionSet))), now, now + TTL_MS,
           mode === 'solo' ? 'playing' : 'waiting', mode === 'solo' ? now + countdownMs : 0, mode === 'solo' ? now + countdownMs + roundMs : 0).run();
         const room = await db.prepare('SELECT * FROM rooms WHERE host_hash = ? AND expires_at > ?').bind(tokenHash, now).first();
         if (room) return view(room, 'host', now);
@@ -172,8 +175,8 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       if (action === 'rematch') {
         await db.prepare(`UPDATE rooms SET phase = 'playing', round = 0, question_ids = ?, history = '[]', host_score = 0, guest_score = 0,
           host_answer = NULL, guest_answer = NULL, host_ready = 0, guest_ready = 0, start_at = ?, deadline = ?
-          WHERE code = ? AND phase = 'finished' AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(JSON.stringify(shuffledIds(questions)), now + countdownMs, now + countdownMs + roundMs, code).run();
-      } else if (room.round === questions.length - 1) {
+          WHERE code = ? AND phase = 'finished' AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(JSON.stringify(shuffledIds(questionSets.get(room.question_set || 1))), now + countdownMs, now + countdownMs + roundMs, code).run();
+      } else if (room.round === JSON.parse(room.question_ids).length - 1) {
         await db.prepare(`UPDATE rooms SET phase = 'finished', host_ready = 0, guest_ready = 0
           WHERE code = ? AND phase = 'reveal' AND round = ? AND host_ready = 1 AND (mode = 'solo' OR guest_ready = 1)`).bind(code, room.round).run();
       } else {

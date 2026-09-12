@@ -1028,3 +1028,160 @@ h1{
 .avatar-status:empty { display: none; }
 .character-status { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
 .character-status:empty { display: none; }
+
+/* Compact screens: keep the decision and primary action in one viewport. */
+.shell { max-width: 800px; padding: 0 24px; position: relative; }
+header { height: 66px; }
+footer { padding: 16px 0; }
+.setup { max-width: 430px; }
+.intro-duo { height: 100px; margin: 0 auto; }
+.intro-duo canvas { width: 100px; height: 112px; }
+.setup > .eyebrow { display: none; }
+.setup h1 { font-size: 34px; margin: 10px 0; }
+.setup .lead { font-size: 13px; margin: 0 0 12px; }
+.mode-switch { margin: 14px 0 10px; }
+.question-set-switch { display: flex; gap: 8px; margin-bottom: 16px; }
+.question-set-switch button { min-height: 40px; flex: 1; border: 1px solid #ddd7e8; border-radius: 11px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; }
+.question-set-switch button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--soft); }
+.question-set-switch button span { font-size: 9px; margin-left: 5px; }
+.question-set-switch button:disabled { cursor: default; }
+fieldset { margin: 12px 0; }
+.avatar-option canvas { height: 82px; }
+form label { margin: 12px 0 7px; }
+form input { height: 46px; }
+form .button { margin-top: 10px; min-height: 48px; }
+.character-status { margin-top: 8px; font-size: 11px; }
+form .small { margin: 12px 0 0; }
+.lobby { padding-top: 8px; }
+.lobby h1 { font-size: 30px; margin: 12px 0; }
+.versus-line { margin: 14px 0; }
+.player canvas { width: 120px; height: 128px; }
+.empty-character { height: 128px; }
+.invite { margin: 14px auto; padding: 16px 20px; }
+.invite-code { margin-bottom: 10px; }
+.lobby > .small { margin: 10px auto; }
+.in-game header { height: 54px; }
+.in-game .edition, .in-game footer { display: none; }
+.in-game .brand { margin-right: auto; font-size: 24px; }
+.in-game .board > #leave-room { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); height: 44px; padding: 10px 14px; font-size: 11px; }
+.board-top { gap: 8px; }
+.mini-player { max-width: 36%; gap: 5px; }
+.mini-player canvas { width: 54px; height: 64px; }
+.mini-player strong, .mini-player .points { font-size: 11px; }
+.timer-wrap { min-width: 100px; }
+.timer { width: 46px; height: 46px; margin: auto; font-size: 22px; border-width: 2px; }
+.round-count { margin-top: 3px; font-size: 10px; white-space: nowrap; }
+.time-track { height: 4px; margin: 8px 0 12px; }
+.question-meta { min-height: 24px; position: relative; gap: 6px 10px; padding-right: 36px; flex-wrap: wrap; font-size: 10px; line-height: 1.5; }
+.population-scope { color: var(--muted); font-weight: 700; }
+.age-label { color: var(--accent); font-weight: 800; white-space: nowrap; }
+.question-year { color: var(--muted); }
+.question-details { margin-left: auto; position: absolute; right: 0; top: -8px; }
+.question-details summary { list-style: none; width: 36px; height: 36px; display: grid; place-items: center; color: var(--muted); font-size: 14px; cursor: pointer; border-radius: 50%; }
+.question-details summary::-webkit-details-marker { display: none; }
+.question-details summary:hover { background: var(--soft); }
+.question-details[open] { z-index: 10; }
+.question-details p { position: absolute; top: 26px; right: 0; width: min(310px, 80vw); background: #fff; border: 1px solid #ded8e7; border-radius: 12px; padding: 14px; color: #4e4858; font-size: 12px; line-height: 1.7; box-shadow: 0 3px 12px #2923350a; }
+.question h1 { font-size: 32px; line-height: 1.2; margin: 9px 0; letter-spacing: -.8px; }
+.question-context { min-height: 0; font-size: 11px; line-height: 1.5; margin: 6px 0 0; }
+.answers, .answers.round-scores { display: flex; gap: 16px; justify-content: center; margin: 16px 0 16px; }
+.answer-item { min-width: 0; flex: 1; }
+.answer-number { font-size: 50px; letter-spacing: -2px; }
+.answer-number small { font-size: 22px; }
+.answer-item p { font-size: 11px; margin-top: 3px; }
+.answer-result { display: grid; justify-items: center; gap: 1px; margin-top: 4px; }
+.answer-error { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.answer-gain { color: var(--accent); font-size: 17px; }
+.guest .answer-gain { color: var(--peach); }
+.answers.single { margin: 16px 0 16px; }
+.answers.single .answer-number { font-size: 62px; }
+.squares { gap: 4px; }
+.square, .square.filled { background: transparent; color: #d5d0da; }
+.square.filled { color: var(--accent); }
+.square svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+.square { transition: color .1s, transform .12s; }
+.squares[aria-disabled="false"] .square:hover { transform: scale(1.15); }
+.selector-toolbar { display: grid; grid-template-columns: 44px 44px 1fr 44px 44px; align-items: center; gap: 5px; margin: 8px 0 0; }
+.selector-toolbar > span { text-align: center; font-size: 10px; color: var(--muted); }
+.selector-toolbar .step { font-size: 19px; height: 40px; width: 40px; justify-self: center; }
+.selector-toolbar .step:disabled { opacity: .4; }
+.countdown-note { font-size: 12px; margin: 4px 0; min-height: 17px; }
+.countdown-note:empty { display: none; }
+.actions { margin: 12px auto 0; }
+.actions .button { min-height: 48px; padding: 12px 16px; }
+.opponent-status { font-size: 11px; line-height: 1.5; margin: 8px 0 0; min-height: 16px; }
+.opponent-status:empty { display: none; }
+.result-box { padding: 12px 16px 8px; margin: 10px 0 0; }
+.result-box h2 { font-size: 18px; line-height: 1.3; margin: 0 0 3px; }
+.fact-details summary { display: flex; align-items: center; justify-content: space-between; min-height: 34px; cursor: pointer; font-size: 11px; color: var(--accent); list-style: none; }
+.fact-details summary::-webkit-details-marker { display: none; }
+.fact-details[open] summary > span { transform: rotate(180deg); }
+.fact-details .explanation { margin: 6px 0; }
+.final { padding-top: 10px; }
+.final h1 { margin: 12px 0; font-size: 30px; }
+.final .versus-line { margin: 14px 0; }
+.final .player canvas { width: 110px; height: 118px; }
+.final .final-points { font-size: 38px; margin: 6px 0; }
+.final .final-points small { font-size: 14px; letter-spacing: 0; color: var(--muted); }
+.final .summary { margin: 14px auto; padding: 15px; }
+.final .button { min-height: 46px; margin: 10px auto; }
+.solo-final .player { margin: 10px auto; }
+.solo-final .final-points { font-size: 50px; }
+.solo-final .summary h2 { font-size: 21px; margin-bottom: 8px; }
+.solo-final .summary p { font-size: 11px; }
+@media (max-width: 600px) {
+  .shell { padding: 0 18px; }
+  header { height: 56px; }
+  .setup h1 { font-size: 29px; }
+  .intro-duo { height: 92px; }
+  .intro-duo canvas { width: 88px; height: 100px; }
+  .avatar-option canvas { height: 72px; }
+  .question-set-switch { margin-bottom: 12px; }
+  .question-set-switch button { min-height: 36px; font-size: 12px; }
+  .in-game header { height: 48px; }
+  .in-game .board > #leave-room { top: 2px; }
+  .mini-player canvas { width: 44px; height: 54px; }
+  .mini-player strong, .mini-player .points { font-size: 10px; }
+  .timer-wrap { min-width: 92px; }
+  .timer { width: 40px; height: 40px; font-size: 21px; }
+  .round-count { font-size: 9px; }
+  .time-track { margin: 6px 0 9px; }
+  .question-meta { font-size: 9px; gap: 3px 7px; min-height: 24px; }
+  .question h1 { font-size: 26px; line-height: 1.2; }
+  .question-context { font-size: 10px; }
+  .answers, .answers.round-scores { gap: 7px; margin: 12px 0 14px; }
+  .answer-number { font-size: 43px; letter-spacing: -2px; }
+  .answer-number small { font-size: 18px; }
+  .answer-item p { font-size: 10px; }
+  .answer-error { font-size: 9px; }
+  .answer-gain { font-size: 16px; }
+  .answers.single { margin: 13px 0 17px; }
+  .answers.single .answer-number { font-size: 56px; }
+  .squares { gap: 2px; }
+  .selector-toolbar { gap: 2px; margin-top: 6px; }
+  .selector-toolbar > span { font-size: 9px; }
+  .result-box { padding: 10px 13px 6px; margin-top: 6px; }
+  .result-box h2 { font-size: 17px; }
+  .fact-details summary { min-height: 32px; }
+  .actions { margin-top: 10px; }
+  .actions .button { min-height: 46px; }
+  .opponent-status { font-size: 10px; margin-top: 7px; }
+  .final h1 { font-size: 27px; }
+}
+@media (max-width: 600px) and (max-height: 740px) {
+  .question h1 { font-size: 23px; margin: 7px 0; }
+  .time-track { margin-bottom: 6px; }
+  .answers, .answers.round-scores { margin: 10px 0; }
+  .answer-number { font-size: 38px; }
+  .answers.single .answer-number { font-size: 50px; }
+  .answer-result { margin-top: 2px; }
+  .actions .button { min-height: 44px; }
+}
+
+/* Keep the population boundary and error readable even in the compact layout. */
+.age-label { font-size: 11px; }
+@media (max-width: 600px) {
+  .question-meta { font-size: 10px; }
+  .answer-error { font-size: 10px; }
+  .answer-item p { font-size: 11px; }
+}

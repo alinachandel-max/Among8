@@ -1,0 +1,1 @@
+ALTER TABLE `rooms` ADD `question_set` integer DEFAULT 1 NOT NULL;
