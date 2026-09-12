@@ -108,8 +108,45 @@ test('origin, names, secrets and expired room boundaries', async () => {
   const { db, call, create, advance } = setup();
   try {
     assert.equal((await call(1, '/rooms', { name: 'Алина', avatar: 'plum' }, { Origin: 'https://evil.test' })).status, 403);
-    assert.equal((await call(1, '/rooms', { name: '', avatar: 'plum' })).status, 400);
+    assert.equal((await call(1, '/rooms', { avatar: 'unknown' })).status, 400);
     const room = await create(); assert(!JSON.stringify(room).includes(token(1))); assert.equal(room.host_hash, undefined); assert.equal(room.question_ids, undefined);
     advance(24 * 3600 * 1000 + 1); assert.equal((await call(1, '/rooms/' + room.code)).status, 404);
+  } finally { db.close(); }
+});
+
+test('character names are canonical; occupied character cannot take the second seat', async () => {
+  const { db, call, advance } = setup();
+  try {
+    let room = await call(1, '/rooms', { avatar: 'lime', name: 'Произвольное имя' });
+    const path = '/rooms/' + room.code;
+    assert.equal(room.players[0].name, 'Кваки');
+    const availability = await call(9, path + '/availability', undefined, { Authorization: '' });
+    assert.deepEqual(availability.occupied, ['lime']); assert.equal(availability.canJoin, true);
+    assert.equal(availability.players, undefined); assert.equal(availability.question, undefined);
+    const conflict = await call(2, path + '/join', { avatar: 'lime' });
+    assert.equal(conflict.status, 409); assert.match(conflict.error, /Кваки уже занят/);
+    assert.equal((await call(1, path)).players[1], null, 'Conflict must not consume the guest seat');
+    room = await call(2, path + '/join', { avatar: 'peach', name: 'Другое имя' });
+    assert.deepEqual(room.players.map(p => p.name), ['Кваки', 'Буба']);
+    assert.equal((await call(2, path + '/join', { avatar: 'peach' })).status, 200, 'Own reconnect is idempotent');
+    const full = await call(9, path + '/availability'); assert.equal(full.canJoin, false); assert.deepEqual(full.occupied, ['lime', 'peach']);
+    // Existing room records may have old nicknames; responses must still use characters.
+    db.raw.prepare('UPDATE rooms SET host_name = ? WHERE code = ?').run('Алина', room.code);
+    room = await call(1, path); assert.equal(room.players[0].name, 'Кваки');
+    room = await call(1, path + '/start', {}); advance(3000);
+    await call(1, path + '/answer', { round: 0, value: 37 }); room = await call(2, path + '/answer', { round: 0, value: 68 });
+    assert.equal(room.phase, 'reveal'); assert.deepEqual(room.players.map(p => p.name), ['Кваки', 'Буба']);
+  } finally { db.close(); }
+});
+
+test('simultaneous attempts at the host character leave it occupied and guest seat free', async () => {
+  const { db, call } = setup();
+  try {
+    const room = await call(1, '/rooms', { avatar: 'lime' }); const path = '/rooms/' + room.code;
+    const attempts = await Promise.all([2, 3].map(n => call(n, path + '/join', { avatar: 'lime' })));
+    assert(attempts.every(r => r.status === 409)); assert.equal((await call(1, path)).players[1], null);
+    assert.equal((await call(2, path + '/join', { avatar: 'sky' })).status, 200);
+    const solo = await call(3, '/rooms', { avatar: 'lime', mode: 'solo' });
+    assert.equal(solo.status, 200); assert.equal(solo.players[0].name, 'Кваки', 'Availability is room-local');
   } finally { db.close(); }
 });

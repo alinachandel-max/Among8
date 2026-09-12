@@ -5,7 +5,7 @@ import { API_ORIGIN } from './config.js';
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const avatarNames = { plum: 'Зубик', lime: 'Кваки', peach: 'Буба', sky: 'Глазик' };
-const state = { mode: 'duel', avatar: 'plum', session: null, room: null, selected: null, pending: false, renderKey: '', pollTimer: null, syncing: false, serverOffset: 0, lastTick: null, lastPhase: '', draftToken: null, pointer: null };
+const state = { mode: 'duel', avatar: 'plum', availability: null, availabilityTimer: null, availabilityLoading: false, session: null, room: null, selected: null, pending: false, renderKey: '', pollTimer: null, syncing: false, serverOffset: 0, lastTick: null, lastPhase: '', draftToken: null, pointer: null };
 const makeToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join('');
 const serverTime = () => performance.now() + state.serverOffset;
 const self = () => state.room?.players.find(p => p?.slot === state.room.role);
@@ -19,7 +19,7 @@ async function request(path, body, token = state.session?.token) {
   const started = performance.now();
   const response = await fetch(`${API_ORIGIN}${path}`, {
     method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
-    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(8000),
   });
   const data = await response.json();
@@ -31,20 +31,60 @@ async function request(path, body, token = state.session?.token) {
 async function enterRoom(join) {
   if (state.pending) return;
   if (!$('setup-form').reportValidity()) return;
-  const name = $('player-name').value.trim();
+  if (!state.avatar) { showError('Выбери свободного персонажа.'); return; }
   const code = $('room-code').value.trim().toUpperCase().replace(/\s/g, '');
   if (join && !/^[A-Z2-9]{8}$/.test(code)) { showError('Введи код из 8 символов из приглашения.'); $('room-code').focus(); return; }
   unlockSound(); showError(''); state.pending = true; setSetupBusy(true);
   state.draftToken ||= makeToken();
   try {
-    const room = await request(join ? `/api/rooms/${code}/join` : '/api/rooms', { name, avatar: state.avatar, mode: state.mode }, state.draftToken);
+    const room = await request(join ? `/api/rooms/${code}/join` : '/api/rooms', { avatar: state.avatar, mode: state.mode }, state.draftToken);
     saveSession({ code: room.code, token: state.draftToken, mode: room.mode });
     history.replaceState(null, '', `?room=${room.code}`); state.pending = false;
     applyRoom(room); schedulePoll(100); playSound('start');
-  } catch (error) { showError(error.name === 'TimeoutError' ? 'Комната долго отвечает. Нажми ещё раз — вторая комната не создастся.' : error.message || 'Проверь подключение и попробуй ещё раз.'); }
+  } catch (error) { showError(error.name === 'TimeoutError' ? 'Комната долго отвечает. Нажми ещё раз — вторая комната не создастся.' : error.message || 'Проверь подключение и попробуй ещё раз.'); if (join && error.status === 409) checkAvailability(); }
   finally { state.pending = false; setSetupBusy(false); }
 }
-function setSetupBusy(busy) { $('create-button').disabled = busy; $('join-button').disabled = busy; }
+function setSetupBusy(busy) { updateCharacterChoices(busy); }
+const invitationCode = () => state.mode === 'duel' ? $('room-code').value.trim().toUpperCase().replace(/\s/g, '') : '';
+function updateCharacterChoices(busy = state.pending) {
+  const code = invitationCode(), validCode = /^[A-Z2-9]{8}$/.test(code);
+  const availability = state.availability?.code === code ? state.availability : null;
+  const occupied = availability?.occupied || [];
+  if (occupied.includes(state.avatar)) state.avatar = null;
+  $('avatar-options').querySelectorAll('button').forEach(button => {
+    const name = avatarNames[button.dataset.avatar], taken = occupied.includes(button.dataset.avatar);
+    button.disabled = busy || taken || validCode && state.availabilityLoading && !availability;
+    button.classList.toggle('occupied', taken);
+    button.setAttribute('aria-pressed', String(button.dataset.avatar === state.avatar));
+    button.setAttribute('aria-label', taken ? `${name} занят` : `Персонаж ${name}`);
+    button.querySelector('.avatar-status').textContent = taken ? 'Занят' : '';
+  });
+  const blockedRoom = validCode && (!availability || !availability.canJoin);
+  $('create-button').disabled = busy || !state.avatar || blockedRoom;
+  $('join-button').disabled = busy || !state.avatar || blockedRoom;
+  $('create-button').textContent = state.mode === 'solo' ? 'Играть одному →' : validCode ? 'Присоединиться к дуэли →' : 'Создать дуэль →';
+  $('join-button').hidden = state.mode === 'solo' || validCode;
+  $('character-status').textContent = availability?.message || (validCode && !availability ? 'Проверяем свободных персонажей…' : occupied.length ? `${occupied.map(id => avatarNames[id]).join(', ')} уже занят${occupied.length > 1 ? 'ы' : ''}. Выбери свободного персонажа.` : '');
+}
+async function checkAvailability() {
+  clearTimeout(state.availabilityTimer);
+  const code = invitationCode();
+  if ($('setup').hidden || !/^[A-Z2-9]{8}$/.test(code)) { state.availability = null; state.availabilityLoading = false; updateCharacterChoices(); return; }
+  state.availabilityLoading = true; updateCharacterChoices();
+  try {
+    const availability = await request(`/api/rooms/${code}/availability`);
+    if (invitationCode() !== code || $('setup').hidden) return;
+    state.availability = availability;
+  } catch (error) {
+    if (invitationCode() !== code || $('setup').hidden) return;
+    state.availability = { code, occupied: [], canJoin: false, message: error.status === 404 ? error.message : 'Не удалось проверить комнату. Пробуем снова…' };
+  } finally {
+    if (invitationCode() === code && !$('setup').hidden) {
+      state.availabilityLoading = false; updateCharacterChoices();
+      state.availabilityTimer = setTimeout(checkAvailability, 2000);
+    }
+  }
+}
 function schedulePoll(delay = 850) { clearTimeout(state.pollTimer); if (state.session) state.pollTimer = setTimeout(sync, delay); }
 async function sync() {
   if (!state.session || state.syncing) return;
@@ -83,6 +123,7 @@ function applyRoom(room) {
   if (key !== state.renderKey) {
     showError('');
     state.renderKey = key; $('setup').hidden = true; $('room-view').hidden = false;
+    clearTimeout(state.availabilityTimer);
     if (room.phase === 'waiting') renderLobby();
     else if (room.phase === 'closed') renderClosed();
     else if (room.phase === 'finished') renderFinal();
@@ -212,7 +253,7 @@ async function shareResult() {
 }
 function renderClosed() { $('room-view').innerHTML = '<div class="lobby"><h1 tabindex="-1">Дуэль завершена</h1><p class="lead">Один из игроков вышел из комнаты.</p><button id="return-home" class="button primary">Создать новую дуэль</button></div>'; $('return-home').onclick = returnHome; }
 async function leaveRoom() { if (state.pending) return; await act('leave'); returnHome(); }
-function returnHome() { const previous = self(); if (previous) { $('player-name').value = previous.name; state.avatar = previous.avatar; $('avatar-options').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.avatar === state.avatar))); } clearTimeout(state.pollTimer); saveSession(null); Object.assign(state, { room: null, renderKey: '', selected: null, pending: false, draftToken: null }); $('room-view').hidden = true; $('room-view').innerHTML = ''; $('setup').hidden = false; $('connection').hidden = true; $('room-code').value = ''; showError(''); history.replaceState(null, '', location.pathname); chooseMode(state.mode); mountCharacters(); window.scrollTo({ top: 0, behavior: 'instant' }); }
+function returnHome() { const previous = self(); if (previous) { state.avatar = previous.avatar; $('avatar-options').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.avatar === state.avatar))); } clearTimeout(state.pollTimer); saveSession(null); Object.assign(state, { room: null, renderKey: '', selected: null, pending: false, draftToken: null }); $('room-view').hidden = true; $('room-view').innerHTML = ''; $('setup').hidden = false; $('connection').hidden = true; $('room-code').value = ''; showError(''); history.replaceState(null, '', location.pathname); chooseMode(state.mode); mountCharacters(); window.scrollTo({ top: 0, behavior: 'instant' }); }
 
 function renderSoloFinal() {
   const room = state.room, p = room.players[0], valid = room.history.map(r => r.host.error).filter(e => e !== null);
@@ -231,11 +272,13 @@ function chooseMode(mode) {
   document.querySelector('.setup h1').innerHTML = mode === 'solo' ? 'Насколько хорошо<br>ты знаешь мир?' : 'Чья интуиция<br>ближе к правде?';
   document.querySelector('.setup .eyebrow').textContent = mode === 'solo' ? 'ТВОЯ ИНТУИЦИЯ. И РЕАЛЬНОСТЬ.' : 'ВЫ ДВОЕ. И РЕАЛЬНОСТЬ.';
   showError('');
+  checkAvailability();
 }
 
 function initialize() {
-  $('avatar-options').innerHTML = Object.entries(avatarNames).map(([kind, name]) => `<button class="avatar-option" type="button" data-avatar="${kind}" aria-label="Персонаж ${name}" aria-pressed="${kind === state.avatar}">${character(kind, 'aria-hidden="true"')}<span>${name}</span></button>`).join('');
-  $('avatar-options').onclick = event => { const button = event.target.closest('[data-avatar]'); if (!button) return; state.avatar = button.dataset.avatar; $('avatar-options').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === button))); unlockSound(); playSound('tap'); };
+  $('avatar-options').innerHTML = Object.entries(avatarNames).map(([kind, name]) => `<button class="avatar-option" type="button" data-avatar="${kind}" aria-label="Персонаж ${name}" aria-pressed="${kind === state.avatar}">${character(kind, 'aria-hidden="true"')}<span>${name}</span><span class="avatar-status"></span></button>`).join('');
+  $('avatar-options').onclick = event => { const button = event.target.closest('[data-avatar]'); if (!button || button.disabled) return; state.avatar = button.dataset.avatar; updateCharacterChoices(); unlockSound(); playSound('tap'); };
+  $('room-code').oninput = () => { clearTimeout(state.availabilityTimer); state.availability = null; updateCharacterChoices(); state.availabilityTimer = setTimeout(checkAvailability, 180); };
   $('setup-form').onsubmit = event => { event.preventDefault(); enterRoom(!!$('room-code').value.trim()); };
   $('join-button').onclick = () => enterRoom(true);
   document.querySelectorAll('[data-mode]').forEach(b => { b.onclick = () => chooseMode(b.dataset.mode); });
@@ -243,6 +286,7 @@ function initialize() {
   document.addEventListener('keydown', event => { if (event.repeat && ['Enter', ' '].includes(event.key)) event.preventDefault(); });
   const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
   if (code) { $('room-code').value = code; $('create-button').textContent = 'Присоединиться к дуэли →'; $('join-button').hidden = true; }
+  checkAvailability();
   try { const saved = JSON.parse(localStorage.getItem('among8-session')); if (saved?.code && /^[a-f0-9]{64}$/.test(saved.token) && (!code || code === saved.code)) { saveSession(saved); state.draftToken = saved.token; sync(); } } catch {}
   mountCharacters();
   setInterval(updateLive, 100);

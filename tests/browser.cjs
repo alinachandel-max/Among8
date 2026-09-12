@@ -18,10 +18,10 @@ const out = path.join(__dirname, 'artifacts'); fs.mkdirSync(out, { recursive: tr
     const { page: guest } = await player(430);
     await host.goto(base); await host.locator('[data-avatar="plum"]').waitFor();
     await host.screenshot({ path: path.join(out, 'setup-390.png'), fullPage: true });
-    await host.locator('#player-name').fill('Алина'); await host.locator('[data-avatar="plum"]').click();
+    await host.locator('[data-avatar="plum"]').click();
     await host.locator('#create-button').click(); await host.locator('.invite-code').waitFor();
     const code = (await host.locator('.invite-code').innerText()).trim();
-    await guest.goto(`${base}/?room=${code}`); await guest.locator('#player-name').fill('Бека'); await guest.locator('[data-avatar="peach"]').click();
+    await guest.goto(`${base}/?room=${code}`); await guest.locator('[data-avatar="peach"]').click();
     await guest.locator('#create-button').click(); await guest.locator('.invite-code').waitFor();
     await host.getByRole('heading', { name: 'Оба здесь. Начинаем?' }).waitFor();
     await host.screenshot({ path: path.join(out, 'lobby-390.png'), fullPage: true });

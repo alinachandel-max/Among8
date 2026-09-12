@@ -1022,3 +1022,9 @@ h1{
   text-underline-offset:5px
 }
 
+
+.avatar-option.occupied { opacity: .6; border-color: #d8d1dd; background: #e7e3e7; cursor: not-allowed; }
+.avatar-status { display: block; color: #655c6d; font-size: 10px; margin-top: 4px; }
+.avatar-status:empty { display: none; }
+.character-status { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
+.character-status:empty { display: none; }

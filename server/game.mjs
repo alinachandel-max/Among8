@@ -1,5 +1,6 @@
 export const ROUND_MS = 15_000;
-export const AVATARS = ['plum', 'lime', 'peach', 'sky'];
+export const AVATAR_NAMES = { plum: 'Зубик', lime: 'Кваки', peach: 'Буба', sky: 'Глазик' };
+export const AVATARS = Object.keys(AVATAR_NAMES);
 const TTL_MS = 24 * 60 * 60 * 1000;
 const encoder = new TextEncoder();
 const score = error => error <= 2 ? 100 : error <= 5 ? 80 : error <= 10 ? 60 : error <= 15 ? 40 : error <= 20 ? 20 : 0;
@@ -22,10 +23,8 @@ async function readBody(request) {
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { fail(400, 'Не удалось прочитать запрос.'); }
 }
 function identity(body) {
-  const name = typeof body.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
-  if (!name || [...name].length > 20 || /[\p{Cc}\p{Cf}]/u.test(name)) fail(400, 'Имя должно содержать от 1 до 20 символов.');
-  if (!AVATARS.includes(body.avatar)) fail(400, 'Выбери персонажа.');
-  return { name, avatar: body.avatar };
+  if (!AVATARS.includes(body?.avatar)) fail(400, 'Выбери персонажа.');
+  return { name: AVATAR_NAMES[body.avatar], avatar: body.avatar };
 }
 
 export function createGameHandler({ questions, clock = Date.now, countdownMs = 3000, roundMs = ROUND_MS }) {
@@ -64,7 +63,7 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     const revealed = room.phase === 'reveal' || room.phase === 'finished';
     const q = byId.get(JSON.parse(room.question_ids)[room.round]);
     const players = ['host', 'guest'].map(slot => room[`${slot}_hash`] ? {
-      slot, name: room[`${slot}_name`], avatar: room[`${slot}_avatar`], score: room[`${slot}_score`],
+      slot, name: AVATAR_NAMES[room[`${slot}_avatar`]], avatar: room[`${slot}_avatar`], score: room[`${slot}_score`],
       answered: room[`${slot}_answer`] !== null,
       answer: revealed || role === slot ? room[`${slot}_answer`] : null,
       ready: !!room[`${slot}_ready`], connected: now - room[`${slot}_seen_at`] < 12_000,
@@ -87,6 +86,15 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
     if (url.pathname === '/api/health' && request.method === 'GET') {
       await db.prepare('SELECT 1 FROM rooms LIMIT 1').first();
       return { ok: true, roundMs, questions: questions.length };
+    }
+    const availability = url.pathname.match(/^\/api\/rooms\/([A-Z2-9]{8})\/availability$/);
+    if (availability && request.method === 'GET') {
+      const room = await getRoom(db, availability[1]);
+      if (!room || room.expires_at <= now) fail(404, 'Комната не найдена или срок приглашения истёк.');
+      const occupied = [room.host_avatar, ...(room.guest_hash ? [room.guest_avatar] : [])];
+      const canJoin = room.mode === 'duel' && room.phase === 'waiting' && !room.guest_hash;
+      return { code: room.code, occupied, canJoin,
+        message: canJoin ? '' : room.mode === 'solo' ? 'Это одиночная игра. Создай свою дуэль.' : room.phase === 'closed' ? 'Эта дуэль уже закрыта.' : 'В этой комнате уже два игрока.' };
     }
     const rawToken = request.headers.get('authorization')?.replace(/^Bearer /, '') || '';
     if (!/^[a-f0-9]{64}$/.test(rawToken)) fail(401, 'Открой комнату заново.');
@@ -123,8 +131,9 @@ export function createGameHandler({ questions, clock = Date.now, countdownMs = 3
       if (room.mode === 'solo') fail(409, 'Это одиночная игра. Создай дуэль, чтобы играть вдвоём.');
       await rateLimit(db, request, now, 'join');
       if (room.phase !== 'waiting' || room.guest_hash) fail(409, 'В этой комнате уже два игрока. Создай свою дуэль.');
+      if (room.host_avatar === person.avatar) fail(409, `${person.name} уже занят. Выбери другого персонажа.`);
       await db.prepare(`UPDATE rooms SET guest_hash = ?, guest_name = ?, guest_avatar = ?, guest_seen_at = ?
-        WHERE code = ? AND phase = 'waiting' AND guest_hash IS NULL`).bind(tokenHash, person.name, person.avatar, now, code).run();
+        WHERE code = ? AND phase = 'waiting' AND guest_hash IS NULL AND host_avatar <> ?`).bind(tokenHash, person.name, person.avatar, now, code, person.avatar).run();
       room = await getRoom(db, code);
       if (room.guest_hash !== tokenHash) fail(409, 'Кто-то уже занял второе место.');
       return view(room, 'guest', now);
